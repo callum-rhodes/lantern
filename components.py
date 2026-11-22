@@ -162,10 +162,55 @@ def _build_add_user_dialog() -> ui.dialog:
     return dialog
 
 
+def _build_delete_user_dialog(current_user_id: int) -> ui.dialog:
+    """A warning dialog for permanently deleting a user and all their data."""
+    users = db.list_users()
+    with ui.dialog() as dialog, ui.card().classes("w-96 gap-3"):
+        ui.label("Delete a user").classes("text-h6")
+        choice = ui.select(
+            {u["id"]: u["name"] for u in users}, value=current_user_id, label="User to delete",
+        ).classes("w-full")
+        warning = ui.label().classes("text-negative")
+        last_user_note = ui.label(
+            "This is the only user, so you will be asked to create a new one afterwards."
+        ).classes("text-grey-7")
+        last_user_note.set_visibility(len(users) == 1)
+
+        def update_warning() -> None:
+            name = next(u["name"] for u in users if u["id"] == choice.value)
+            count = db.transaction_count(choice.value)
+            warning.text = (
+                f"This permanently deletes '{name}' and everything they have recorded: "
+                f"{count} transaction(s) and all of their categories. "
+                "This cannot be undone. Make a backup first if you are unsure."
+            )
+
+        choice.on_value_change(update_warning)
+        update_warning()
+
+        def delete() -> None:
+            uid = choice.value
+            try:
+                db.delete_user(uid)
+            except db.DataError as exc:
+                notify_error(exc)
+                return
+            remaining = db.list_users()
+            if uid == current_user_id and remaining:  # move this browser to someone else
+                state.set_current_user(remaining[0]["id"])
+            ui.navigate.reload()
+
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            ui.button("Delete permanently", on_click=delete).props("color=negative")
+    return dialog
+
+
 def _build_header(ctx: PageContext, active: str) -> None:
     """Title, navigation, user picker, currency selector and dark-mode toggle."""
     ui.dark_mode(value=bool(app.storage.user.get("dark_mode")))
     add_user_dialog = _build_add_user_dialog()
+    delete_user_dialog = _build_delete_user_dialog(ctx.user["id"])
     select_props = "dense options-dense outlined dark"
 
     with ui.header().classes("items-center justify-between gap-4"):
@@ -182,6 +227,8 @@ def _build_header(ctx: PageContext, active: str) -> None:
                 .props(select_props).classes("min-w-32").tooltip("Active user")
             ui.button(icon="person_add", on_click=add_user_dialog.open) \
                 .props("flat round dense color=white").tooltip("Add user")
+            ui.button(icon="person_remove", on_click=delete_user_dialog.open) \
+                .props("flat round dense color=white").tooltip("Delete user")
             ui.select(ctx.status.currencies, value=ctx.display.code, on_change=_switch_currency) \
                 .props(select_props).classes("w-24").tooltip("Display currency")
             ui.button(icon="dark_mode", on_click=_toggle_dark) \

@@ -275,6 +275,21 @@ def add_user(name: str) -> int:
         return _create_user(conn, name)
 
 
+def delete_user(user_id: int) -> None:
+    """Delete a user and everything they own (transactions, categories). Cannot be undone.
+
+    Deleting the last user is allowed; the app then shows the first-run setup card.
+    """
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise DataError("User not found.")
+        conn.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
+        # Subcategories first, since they reference their parents.
+        conn.execute("DELETE FROM categories WHERE user_id = ? AND parent_id IS NOT NULL", (user_id,))
+        conn.execute("DELETE FROM categories WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
 # --------------------------------------------------------------------------
 # Categories
 # --------------------------------------------------------------------------
