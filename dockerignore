@@ -24,3 +24,6 @@ env/
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+# Screenshots used by the README
+docs/
