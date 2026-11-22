@@ -38,7 +38,7 @@ TABLE_COLUMNS = [
 
 
 def _category_label(txn: dict[str, Any]) -> str:
-    """'Food > Groceries', or just 'Food' when no subcategory is used."""
+    """'Food > Groceries', or just 'Food > Other' when no subcategory is used."""
     if txn["parent_name"]:
         return f"{txn['parent_name']} > {txn['category_name']}"
     return txn["category_name"]
@@ -70,7 +70,7 @@ class TransactionForm:
                 on_change=self._on_category_change,
             ).classes("w-48")
             self.subcategory = ui.select(
-                self._sub_options(top_id), value=sub_id, label="Subcategory (optional)",
+                self._sub_options(top_id), value=sub_id, label="Subcategory (default: Other)",
                 clearable=True,
             ).classes("w-52")
             self.description = ui.input("Description", value=description).classes("grow")

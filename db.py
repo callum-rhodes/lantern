@@ -32,6 +32,16 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent / "finance.db"
 DEFAULT_BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 DEFAULT_BASE_CURRENCY = "GBP"
 KINDS = ("income", "expense")
+OTHER_NAME = "Other"
+# SQL: sorts a category's 'Other' subcategory after its siblings (alias c).
+_OTHER_LAST = "CASE WHEN c.parent_id IS NOT NULL AND c.name = 'Other' COLLATE NOCASE THEN 1 ELSE 0 END"
+
+def is_other(category: dict[str, Any]) -> bool:
+    """True for the built-in 'Other' subcategory (protected, always last)."""
+    return (
+        category.get("parent_id") is not None
+        and category["name"].strip().casefold() == OTHER_NAME.casefold()
+    )
 
 # (category, kind, [subcategories]) created for every new user.
 DEFAULT_CATEGORIES: list[tuple[str, str, list[str]]] = [
@@ -156,6 +166,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
             counters[key] = counters.get(key, 0) + 1
             conn.execute("UPDATE categories SET sort_order = ? WHERE id = ?", (counters[key], row["id"]))
 
+    # Transactions filed directly on a top-level category move to its 'Other' subcategory.
+    for row in conn.execute(
+        "SELECT DISTINCT t.user_id, c.id, c.kind FROM transactions t "
+        "JOIN categories c ON c.id = t.category_id WHERE c.parent_id IS NULL"
+    ).fetchall():
+        other = _ensure_other(conn, row["user_id"], row["id"], row["kind"])
+        conn.execute(
+            "UPDATE transactions SET category_id = ? WHERE category_id = ? AND user_id = ?",
+            (other, row["id"], row["user_id"]),
+        )
+
 
 def init_db() -> None:
     """Create all tables and indexes if they do not exist yet, and upgrade old databases."""
@@ -271,6 +292,30 @@ def _insert_category(
     )
     return int(cur.lastrowid)
 
+def _other_id(conn: sqlite3.Connection, user_id: int, parent_id: int) -> int | None:
+    """Id of a top-level category's 'Other' subcategory, if it exists."""
+    row = conn.execute(
+        "SELECT id FROM categories WHERE user_id = ? AND parent_id = ? AND name = ? COLLATE NOCASE",
+        (user_id, parent_id, OTHER_NAME),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _ensure_other(conn: sqlite3.Connection, user_id: int, parent_id: int, kind: str) -> int:
+    """Find or create the 'Other' subcategory under a top-level category."""
+    existing = _other_id(conn, user_id, parent_id)
+    return existing if existing is not None else _insert_category(conn, user_id, OTHER_NAME, parent_id, kind)
+
+
+def _resolve_category(conn: sqlite3.Connection, user_id: int, category_id: int) -> int:
+    """Top-level categories become their 'Other' subcategory; subcategories pass through."""
+    row = conn.execute(
+        "SELECT id, parent_id, kind FROM categories WHERE id = ? AND user_id = ?",
+        (category_id, user_id),
+    ).fetchone()
+    if row is None or row["parent_id"] is not None:
+        return category_id  # unknown ids are rejected later by validation
+    return _ensure_other(conn, user_id, row["id"], row["kind"])
 
 def get_category(user_id: int, category_id: int) -> dict[str, Any] | None:
     """One category (with its parent's name, if any)."""
@@ -291,12 +336,12 @@ def list_categories(user_id: int) -> list[dict[str, Any]]:
     """
     with connect() as conn:
         return _all(conn.execute(
-            "SELECT c.id, c.name, c.parent_id, c.kind, p.name AS parent_name "
-            "FROM categories c LEFT JOIN categories p ON p.id = c.parent_id "
-            "WHERE c.user_id = ? "
-            "ORDER BY c.kind, COALESCE(p.sort_order, c.sort_order), "
-            "         CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END, "
-            "         c.sort_order, c.name COLLATE NOCASE",
+            f"SELECT c.id, c.name, c.parent_id, c.kind, p.name AS parent_name "
+            f"FROM categories c LEFT JOIN categories p ON p.id = c.parent_id "
+            f"WHERE c.user_id = ? "
+            f"ORDER BY c.kind, COALESCE(p.sort_order, c.sort_order), "
+            f"         CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END, "
+            f"         {_OTHER_LAST}, c.sort_order, c.name COLLATE NOCASE",
             (user_id,),
         ))
 
@@ -322,7 +367,9 @@ def list_subcategories(user_id: int, parent_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         return _all(conn.execute(
             "SELECT id, name, parent_id, kind FROM categories "
-            "WHERE user_id = ? AND parent_id = ? ORDER BY sort_order, name COLLATE NOCASE",
+            "WHERE user_id = ? AND parent_id = ? "
+            "ORDER BY CASE WHEN name = 'Other' COLLATE NOCASE THEN 1 ELSE 0 END, "
+            "         sort_order, name COLLATE NOCASE",
             (user_id, parent_id),
         ))
 
@@ -335,8 +382,9 @@ def category_options(
     for top in get_category_tree(user_id):
         if kind is not None and top["kind"] != kind:
             continue
-        if top["id"] != exclude_id:
-            options[top["id"]] = top["name"]
+        if top["id"] == exclude_id:
+            continue
+        options[top["id"]] = top["name"]
         for child in top["children"]:
             if child["id"] != exclude_id:
                 options[child["id"]] = f"{top['name']} > {child['name']}"
@@ -372,93 +420,116 @@ def add_category(user_id: int, name: str, parent_id: int | None = None, kind: st
 
 
 def rename_category(user_id: int, category_id: int, new_name: str) -> None:
-    """Rename a category or subcategory."""
+    """Rename a category or subcategory ('Other' is protected and reserved)."""
     new_name = (new_name or "").strip()
     if not new_name:
         raise DataError("Please enter a name.")
     with connect() as conn:
+        cat = conn.execute(
+            "SELECT id, name, parent_id FROM categories WHERE id = ? AND user_id = ?",
+            (category_id, user_id),
+        ).fetchone()
+        if cat is None:
+            raise DataError("Category not found.")
+        if is_other(dict(cat)):
+            raise DataError("'Other' is built in and can't be renamed.")
+        if cat["parent_id"] is not None and new_name.casefold() == OTHER_NAME.casefold():
+            raise DataError("'Other' is reserved for the built-in subcategory.")
         try:
-            cur = conn.execute(
+            conn.execute(
                 "UPDATE categories SET name = ? WHERE id = ? AND user_id = ?",
                 (new_name, category_id, user_id),
             )
         except sqlite3.IntegrityError as exc:
             raise DataError(f"'{new_name}' already exists here.") from exc
-        if cur.rowcount == 0:
-            raise DataError("Category not found.")
 
 
 def move_category(user_id: int, category_id: int, direction: int) -> bool:
-    """Move a category one step up (``direction=-1``) or down (``+1``) among its siblings.
+    """Move a category one step up (-1) or down (+1) among its siblings.
 
-    Top-level categories move among those of the same kind; subcategories move
-    within their parent. Returns False if it is already first/last.
+    'Other' can't be moved and nothing can move below it. Returns False if
+    already first/last.
     """
     if direction not in (-1, 1):
         raise ValueError("direction must be -1 (up) or 1 (down)")
     with connect() as conn:
         cat = conn.execute(
-            "SELECT id, parent_id, kind FROM categories WHERE id = ? AND user_id = ?",
+            "SELECT id, name, parent_id, kind FROM categories WHERE id = ? AND user_id = ?",
             (category_id, user_id),
         ).fetchone()
         if cat is None:
             raise DataError("Category not found.")
-        siblings = [row["id"] for row in conn.execute(
-            "SELECT id FROM categories "
+        if is_other(dict(cat)):
+            raise DataError("'Other' always stays at the bottom.")
+        siblings = [dict(row) for row in conn.execute(
+            "SELECT id, name, parent_id FROM categories "
             "WHERE user_id = ? AND COALESCE(parent_id, 0) = COALESCE(?, 0) AND kind = ? "
-            "ORDER BY sort_order, name COLLATE NOCASE",
+            "ORDER BY CASE WHEN parent_id IS NOT NULL AND name = 'Other' COLLATE NOCASE "
+            "              THEN 1 ELSE 0 END, sort_order, name COLLATE NOCASE",
             (user_id, cat["parent_id"], cat["kind"]),
         )]
-        index = siblings.index(category_id)
+        ids = [s["id"] for s in siblings]
+        index = ids.index(category_id)
         target = index + direction
-        if not 0 <= target < len(siblings):
+        if not 0 <= target < len(ids) or is_other(siblings[target]):
             return False
-        siblings[index], siblings[target] = siblings[target], siblings[index]
-        # Renumber the whole group so the order stays valid even if values were equal.
+        ids[index], ids[target] = ids[target], ids[index]
         conn.executemany(
             "UPDATE categories SET sort_order = ? WHERE id = ? AND user_id = ?",
-            [(position, cid, user_id) for position, cid in enumerate(siblings, start=1)],
+            [(position, cid, user_id) for position, cid in enumerate(ids, start=1)],
         )
     return True
 
 
 def category_usage(user_id: int, category_id: int) -> dict[str, int]:
-    """How many transactions and subcategories use a category."""
+    """Transactions and (user-made) subcategories under a category.
+
+    For a top-level category, its 'Other' subcategory is counted as part of the
+    category itself: its transactions are included and it is not a subcategory.
+    """
     with connect() as conn:
+        other = _other_id(conn, user_id, category_id)
+        ids = [category_id] + ([other] if other is not None else [])
+        marks = ",".join("?" * len(ids))
         txns = conn.execute(
-            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND category_id = ?",
-            (user_id, category_id),
+            f"SELECT COUNT(*) FROM transactions WHERE user_id = ? AND category_id IN ({marks})",
+            [user_id, *ids],
         ).fetchone()[0]
         subs = conn.execute(
-            "SELECT COUNT(*) FROM categories WHERE user_id = ? AND parent_id = ?",
-            (user_id, category_id),
+            "SELECT COUNT(*) FROM categories WHERE user_id = ? AND parent_id = ? AND id IS NOT ?",
+            (user_id, category_id, other),
         ).fetchone()[0]
     return {"transactions": txns, "subcategories": subs}
 
 
 def delete_category(user_id: int, category_id: int, reassign_to: int | None = None) -> None:
-    """Delete a category.
+    """Delete a category (and its 'Other', if it has one).
 
-    Blocked while it still has subcategories. If it has transactions, pass
-    ``reassign_to`` (another category of the same kind) to move them first;
-    otherwise a clear error is raised.
+    Blocked while it has subcategories other than 'Other'. If it (or its 'Other')
+    has transactions, pass ``reassign_to`` (same kind) to move them first.
+    'Other' itself can't be deleted on its own.
     """
     with connect() as conn:
         cat = conn.execute(
-            "SELECT id, name, kind FROM categories WHERE id = ? AND user_id = ?",
+            "SELECT id, name, parent_id, kind FROM categories WHERE id = ? AND user_id = ?",
             (category_id, user_id),
         ).fetchone()
         if cat is None:
             raise DataError("Category not found.")
+        if is_other(dict(cat)):
+            raise DataError("'Other' is built in and can't be deleted.")
+        other = _other_id(conn, user_id, category_id)
+        ids = [category_id] + ([other] if other is not None else [])
+        marks = ",".join("?" * len(ids))
         subs = conn.execute(
-            "SELECT COUNT(*) FROM categories WHERE user_id = ? AND parent_id = ?",
-            (user_id, category_id),
+            "SELECT COUNT(*) FROM categories WHERE user_id = ? AND parent_id = ? AND id IS NOT ?",
+            (user_id, category_id, other),
         ).fetchone()[0]
         if subs:
             raise DataError(f"'{cat['name']}' still has subcategories. Delete those first.")
         txns = conn.execute(
-            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND category_id = ?",
-            (user_id, category_id),
+            f"SELECT COUNT(*) FROM transactions WHERE user_id = ? AND category_id IN ({marks})",
+            [user_id, *ids],
         ).fetchone()[0]
         if txns:
             if reassign_to is None:
@@ -466,18 +537,21 @@ def delete_category(user_id: int, category_id: int, reassign_to: int | None = No
                     f"'{cat['name']}' has {txns} transaction(s). "
                     "Move them to another category before deleting it."
                 )
+            target_id = _resolve_category(conn, user_id, reassign_to)
             target = conn.execute(
                 "SELECT id, kind FROM categories WHERE id = ? AND user_id = ?",
-                (reassign_to, user_id),
+                (target_id, user_id),
             ).fetchone()
-            if target is None or target["id"] == category_id:
+            if target is None or target["id"] in ids:
                 raise DataError("Choose a different category to move the transactions to.")
             if target["kind"] != cat["kind"]:
                 raise DataError("Transactions can only move to a category of the same kind (income/expense).")
             conn.execute(
-                "UPDATE transactions SET category_id = ? WHERE category_id = ? AND user_id = ?",
-                (reassign_to, category_id, user_id),
+                f"UPDATE transactions SET category_id = ? WHERE user_id = ? AND category_id IN ({marks})",
+                [target_id, user_id, *ids],
             )
+        if other is not None:
+            conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", (other, user_id))
         conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", (category_id, user_id))
 
 
@@ -513,6 +587,7 @@ def add_transaction(
 ) -> int:
     """Insert a transaction (signed ``amount_cents``) and return its id."""
     with connect() as conn:
+        category_id = _resolve_category(conn, user_id, category_id)
         iso = _check_transaction(conn, user_id, tx_date, amount_cents, category_id)
         cur = conn.execute(
             "INSERT INTO transactions(user_id, date, amount_cents, category_id, description) "
@@ -528,6 +603,7 @@ def update_transaction(
 ) -> None:
     """Replace the fields of an existing transaction."""
     with connect() as conn:
+        category_id = _resolve_category(conn, user_id, category_id)
         iso = _check_transaction(conn, user_id, tx_date, amount_cents, category_id)
         cur = conn.execute(
             "UPDATE transactions SET date = ?, amount_cents = ?, category_id = ?, description = ? "
@@ -635,6 +711,17 @@ def existing_keys(user_id: int, date_from: str, date_to: str) -> set[tuple[str, 
     with connect() as conn:
         return _existing_keys(conn, user_id, date_from, date_to)
 
+def other_subcategory_map(user_id: int) -> dict[int, int]:
+    """{top-level category id: id of its 'Other' subcategory} for those that have one."""
+    with connect() as conn:
+        return {
+            r["parent_id"]: r["id"]
+            for r in conn.execute(
+                "SELECT id, parent_id FROM categories "
+                "WHERE user_id = ? AND parent_id IS NOT NULL AND name = ? COLLATE NOCASE",
+                (user_id, OTHER_NAME),
+            )
+        }
 
 def import_transactions(
     user_id: int, rows: list[tuple[str, int, int, str]], skip_duplicates: bool = False
@@ -650,6 +737,7 @@ def import_transactions(
         if skip_duplicates and rows:
             existing = _existing_keys(conn, user_id, min(r[0] for r in rows), max(r[0] for r in rows))
         for tx_date, cents, category_id, description in rows:
+            category_id = _resolve_category(conn, user_id, category_id)
             iso = _check_transaction(conn, user_id, tx_date, cents, category_id)
             if (iso, cents, category_id) in existing:
                 skipped += 1
@@ -688,17 +776,21 @@ def available_years(user_id: int) -> list[int]:
     return [r["y"] for r in rows]
 
 
-def period_summary(user_id: int, year: int, category_id: int | None = None) -> dict[str, Any]:
-    """Income, expenses, net and savings rate (None if no income) for one year."""
-    start, end = _year_bounds(year)
+def period_summary(user_id: int, year: int | None, category_id: int | None = None) -> dict[str, Any]:
+    """Income, expenses, net and savings rate for one year (or all years if year is None)."""
     clause, clause_params = _category_clause(category_id)
+    sql = (
+        f"SELECT {_INCOME_SQL} AS income, {_EXPENSE_SQL} AS expenses "
+        "FROM transactions t JOIN categories c ON c.id = t.category_id "
+        "WHERE t.user_id = ?"
+    )
+    params: list[Any] = [user_id]
+    if year is not None:
+        start, end = _year_bounds(year)
+        sql += " AND t.date >= ? AND t.date < ?"
+        params += [start, end]
     with connect() as conn:
-        row = conn.execute(
-            f"SELECT {_INCOME_SQL} AS income, {_EXPENSE_SQL} AS expenses "
-            "FROM transactions t JOIN categories c ON c.id = t.category_id "
-            "WHERE t.user_id = ? AND t.date >= ? AND t.date < ?" + clause,
-            [user_id, start, end, *clause_params],
-        ).fetchone()
+        row = conn.execute(sql + clause, [*params, *clause_params]).fetchone()
     income, expenses = row["income"], row["expenses"]
     net = income - expenses
     return {
@@ -743,6 +835,38 @@ def monthly_by_category(
     )
     with connect() as conn:
         return _all(conn.execute(sql, [sign, user_id, start, end, kind, *clause_params]))
+
+
+def yearly_by_category(
+    user_id: int, kind: str, level: str = "category", category_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Like ``monthly_by_category`` but one total per calendar year, across all years.
+
+    The year is returned under the key 'month' (e.g. '2025') so the overview page
+    can treat years and months the same way.
+    """
+    if kind not in KINDS:
+        raise ValueError(f"Unknown kind: {kind}")
+    if level == "category":
+        label_sql = "COALESCE(p.name, c.name)"
+    elif level == "subcategory":
+        label_sql = "CASE WHEN p.name IS NULL THEN c.name ELSE p.name || ' > ' || c.name END"
+    else:
+        raise ValueError(f"Unknown level: {level}")
+    sign = -1 if kind == "expense" else 1
+    clause, clause_params = _category_clause(category_id)
+    sql = (
+        f"SELECT strftime('%Y', t.date) AS month, {label_sql} AS label, "
+        "       SUM(t.amount_cents) * ? AS cents "
+        "FROM transactions t "
+        "JOIN categories c ON c.id = t.category_id "
+        "LEFT JOIN categories p ON p.id = c.parent_id "
+        "WHERE t.user_id = ? AND c.kind = ?"
+        + clause
+        + " GROUP BY strftime('%Y', t.date), label ORDER BY month, label"
+    )
+    with connect() as conn:
+        return _all(conn.execute(sql, [sign, user_id, kind, *clause_params]))
 
 
 def monthly_income_expense(
@@ -948,17 +1072,17 @@ def delete_backup(name: str) -> None:
 
 # (category, subcategory, min per month, max per month, min cents, max cents)
 _DEMO_EXPENSES: list[tuple[str, str, int, int, int, int]] = [
-    ("Housing", "Utilities", 1, 1, 8000, 14000),
+    ("Home", "Rent/Mortgage", 1, 1, 8000, 14000),
     ("Food", "Groceries", 6, 10, 1500, 9000),
     ("Food", "Eating out", 2, 6, 800, 6000),
     ("Transport", "Fuel", 1, 3, 3000, 7000),
     ("Transport", "Public transport", 3, 8, 250, 2500),
-    ("Leisure", "Entertainment", 1, 4, 500, 4000),
-    ("Leisure", "Holidays", 0, 1, 20000, 120000),
+    ("Leisure", "Events", 1, 4, 500, 4000),
+    ("Holiday", "Other", 0, 1, 20000, 120000),
     ("Health", "Medical", 0, 1, 1000, 8000),
     ("Health", "Fitness", 1, 1, 3000, 3500),
     ("Shopping", "Clothing", 0, 2, 2000, 9000),
-    ("Shopping", "Household", 0, 2, 1000, 8000),
+    ("Shopping", "Other", 0, 2, 1000, 8000),
 ]
 
 _DEMO_DESCRIPTIONS: dict[str, list[str]] = {
@@ -966,7 +1090,7 @@ _DEMO_DESCRIPTIONS: dict[str, list[str]] = {
     "Eating out": ["Lunch", "Dinner out", "Coffee", "Takeaway"],
     "Fuel": ["Petrol", "Petrol station"],
     "Public transport": ["Train ticket", "Bus fare", "Tube top-up"],
-    "Entertainment": ["Cinema", "Streaming", "Concert"],
+    "Events": ["Cinema", "Streaming", "Concert"],
 }
 
 
@@ -1006,11 +1130,11 @@ def _demo_rows(
         # Fixed monthly items: salary (slowly rising), rent, occasional extra income.
         items: list[tuple[date, int, str, str, str, str]] = [
             (on(25), 260000 + i * 800, "Income", "Salary", "income", "Salary"),
-            (on(1), -95000, "Housing", "Rent", "expense", "Rent"),
+            (on(1), -95000, "Home", "Rent/Mortgage", "expense", "Rent"),
         ]
         if rng.random() < 0.15:
             items.append((on(rng.randint(1, 28)), rng.randint(5000, 30000),
-                          "Income", "Other income", "income", "Side income"))
+                          "Income", "Other", "income", "Side income"))
         for top, sub, lo_n, hi_n, lo_c, hi_c in _DEMO_EXPENSES:
             for _ in range(rng.randint(lo_n, hi_n)):
                 text = rng.choice(_DEMO_DESCRIPTIONS.get(sub, [sub]))

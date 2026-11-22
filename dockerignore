@@ -1,0 +1,26 @@
+# Local data: never bake these into the image
+finance.db
+finance.db-*
+backups/
+.nicegui/
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Version control and editor files
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

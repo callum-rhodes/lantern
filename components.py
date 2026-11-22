@@ -107,6 +107,21 @@ def content() -> Iterator[ui.column]:
 # Header
 # --------------------------------------------------------------------------
 
+def _choose_user(user_id: int) -> None:
+    """Remember the chosen user for this browser and rebuild the page."""
+    state.set_current_user(user_id)
+    ui.navigate.reload()
+
+
+def _build_user_picker(users: list[dict[str, Any]]) -> None:
+    """Full-screen card asking which user this device should view."""
+    with ui.card().classes("absolute-center w-96 gap-3"):
+        ui.label(f"Welcome to {APP_TITLE}").classes("text-h5")
+        ui.label("Who is using the tracker on this device?").classes("text-grey-7")
+        for user in users:
+            ui.button(user["name"], on_click=lambda _, uid=user["id"]: _choose_user(uid)) \
+                .classes("w-full")
+
 def _switch_user(event: Any) -> None:
     """Remember the chosen user and rebuild the page."""
     state.set_current_user(event.value)
@@ -226,10 +241,14 @@ async def build_layout(active: str) -> PageContext | None:
     ``active`` is the navigation label to highlight. Returns ``None`` (after
     showing the setup card) when the base currency or the first user is missing.
     """
+    users = db.list_users()
     user = state.get_current_user()
     need_currency = not db.is_base_currency_set()
-    if need_currency or user is None:
-        _build_first_run_setup(need_currency=need_currency, need_user=user is None)
+    if need_currency or not users:
+        _build_first_run_setup(need_currency=need_currency, need_user=not users)
+        return None
+    if user is None:
+        _build_user_picker(users)
         return None
 
     status = await rates.ensure_rates_async()

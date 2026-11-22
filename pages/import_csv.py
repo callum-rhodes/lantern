@@ -138,7 +138,8 @@ class Matcher:
         for cat in db.list_categories(user_id):  # top-level first, so plain names favour them
             label = f"{cat['parent_name']} > {cat['name']}" if cat["parent_name"] else cat["name"]
             self.by_label[(_norm(label), cat["kind"])] = cat["id"]
-            self.by_label.setdefault((_norm(cat["name"]), cat["kind"]), cat["id"])
+            if not db.is_other(cat):
+                self.by_label.setdefault((_norm(cat["name"]), cat["kind"]), cat["id"])
 
     def find(self, description: str, kind: str, csv_category: str = "") -> int | None:
         """Category id for this row, or None if nothing matches."""
@@ -238,6 +239,7 @@ async def import_page() -> None:
             auto = [r for r in rows if r.category_id is not None]
             manual = [r for r in rows if r.category_id is None]
             existing = db.existing_keys(user_id, min(r.date for r in rows), max(r.date for r in rows))
+            others = db.other_subcategory_map(user_id)
             ui.label(
                 f"{len(rows)} row(s) read: {len(auto)} matched automatically, "
                 f"{len(manual)} need a category."
@@ -282,9 +284,10 @@ async def import_page() -> None:
                     columns=TABLE_COLUMNS, row_key="line", pagination=15,
                     rows=[{
                         "line": r.line, "date": r.date, "description": r.description,
-                        "category": labels.get(r.category_id, "?"), "amount": money(r.cents),
+                        "category": labels.get(others.get(r.category_id, r.category_id), "?"),
                         "amount_class": components.amount_class(r.cents),
-                        "status": "Already exists" if (r.date, r.cents, r.category_id) in existing else "",
+                        "status": "Already exists"
+                            if (r.date, r.cents, others.get(r.category_id, r.category_id)) in existing else "",
                     } for r in auto],
                 )
                 table.props("flat bordered dense").classes("w-full")

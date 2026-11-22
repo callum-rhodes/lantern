@@ -1,0 +1,17 @@
+services:
+  finance-tracker:
+    build: .
+    container_name: finance-tracker
+    restart: unless-stopped
+    ports:
+      # There is no login. On a server, prefer binding to localhost and putting a
+      # reverse proxy with authentication in front, e.g. "127.0.0.1:8080:8080".
+      - "8080:8080"
+    environment:
+      TZ: ${TZ:-Europe/London}
+      # FINANCE_STORAGE_SECRET: change-me   # optional; otherwise generated and kept in the database
+    volumes:
+      - finance-data:/data
+
+volumes:
+  finance-data:

@@ -140,16 +140,19 @@ async def categories_page() -> None:
                         ui.label("No subcategories").classes("text-caption text-grey-7 q-pl-md")
                     for child_index, child in enumerate(top["children"]):
                         child = {**child, "parent_name": top["name"]}
+                        protected = db.is_other(child)
+                        movable = sum(not db.is_other(c) for c in top["children"])
                         with ui.row().classes("w-full items-center justify-between q-pl-md"):
                             ui.label(child["name"])
                             with ui.row().classes("gap-1"):
                                 _icon_button("arrow_upward", "Move up", lambda c=child: move(c, -1),
-                                             enabled=child_index > 0)
+                                             enabled=not protected and child_index > 0)
                                 _icon_button("arrow_downward", "Move down", lambda c=child: move(c, 1),
-                                             enabled=child_index < len(top["children"]) - 1)
-                                _icon_button("edit", "Rename", lambda c=child: rename(c))
+                                             enabled=not protected and child_index < movable - 1)
+                                _icon_button("edit", "Rename", lambda c=child: rename(c), enabled=not protected)
                                 _icon_button("delete", "Delete",
-                                             lambda c=child: _delete_category(user_id, c, category_list.refresh))
+                                             lambda c=child: _delete_category(user_id, c, category_list.refresh),
+                                             enabled=not protected)
 
     def move(category: dict[str, Any], direction: int) -> None:
         """Move a category up (-1) or down (+1) within its group."""

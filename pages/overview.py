@@ -28,9 +28,14 @@ HOVER = "%{x}: %{y:,.2f}<extra>%{fullData.name}</extra>"
 # Data helpers
 # --------------------------------------------------------------------------
 
-def _months(year: int) -> list[str]:
-    """The twelve 'YYYY-MM' keys of a year."""
-    return [f"{year}-{month:02d}" for month in range(1, 13)]
+ALL_YEARS = 0  # value of the "All years" entry in the year dropdown
+
+def _periods(year: int, years: list[int]) -> tuple[list[str], list[str]]:
+    """(keys, labels) for the columns: 12 months of a year, or every year from first to last."""
+    if year == ALL_YEARS:
+        keys = [str(y) for y in range(years[0], years[-1] + 1)]
+        return keys, keys
+    return [f"{year}-{m:02d}" for m in range(1, 13)], MONTH_NAMES
 
 
 def _pivot(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -105,59 +110,60 @@ def _style(fig: go.Figure, display: state.Display) -> go.Figure:
     return fig
 
 
-def _monthly_figure(pivot: dict[str, dict[str, int]], year: int, display: state.Display) -> go.Figure:
-    """Stacked bars: one bar per month, one segment per category."""
-    months = _months(year)
+def _monthly_figure(pivot, periods, display) -> go.Figure:
+    keys, labels = periods
     fig = go.Figure()
-    for label, by_month in pivot.items():
+    for label, by_period in pivot.items():
         fig.add_bar(
             name=label,
-            x=MONTH_NAMES,
-            y=[display.major(by_month.get(month, 0)) for month in months],
+            x=labels,
+            y=[display.major(by_period.get(k, 0)) for k in keys],
             hovertemplate=HOVER,
         )
     fig.update_layout(barmode="stack")
     return _style(fig, display)
 
 
-def _income_expense_figure(rows: list[dict[str, Any]], year: int, display: state.Display) -> go.Figure:
-    """Grouped bars for income and expenses with a net line."""
-    by_month = {row["month"]: row for row in rows}
-    months = _months(year)
-    income = [by_month.get(m, {}).get("income", 0) for m in months]
-    expenses = [by_month.get(m, {}).get("expenses", 0) for m in months]
+def _income_expense_figure(rows, periods, display) -> go.Figure:
+    keys, labels = periods
+    by_period = {row["month"]: row for row in rows}
+    income = [by_period.get(k, {}).get("income", 0) for k in keys]
+    expenses = [by_period.get(k, {}).get("expenses", 0) for k in keys]
     fig = go.Figure()
-    fig.add_bar(name="Income", x=MONTH_NAMES, y=[display.major(v) for v in income],
+    fig.add_bar(name="Income", x=labels, y=[display.major(v) for v in income],
                 marker_color=INCOME_COLOR, hovertemplate=HOVER)
-    fig.add_bar(name="Expenses", x=MONTH_NAMES, y=[display.major(v) for v in expenses],
+    fig.add_bar(name="Expenses", x=labels, y=[display.major(v) for v in expenses],
                 marker_color=EXPENSE_COLOR, hovertemplate=HOVER)
-    fig.add_scatter(name="Net", x=MONTH_NAMES, mode="lines+markers",
+    fig.add_scatter(name="Net", x=labels, mode="lines+markers",
                     y=[display.major(i - e) for i, e in zip(income, expenses)],
                     line={"color": NET_COLOR}, hovertemplate=HOVER)
     fig.update_layout(barmode="group")
     return _style(fig, display)
 
 
-def _yearly_figure(
-    rows: list[dict[str, Any]], display: state.Display, trend: tuple[str, list[dict[str, Any]]] | None
-) -> go.Figure:
-    """Lines across all years for income, expenses and net, plus an optional category line."""
-    years = [str(row["year"]) for row in rows]
-    fig = go.Figure()
-    for name, color, values in (
-        ("Income", INCOME_COLOR, [r["income"] for r in rows]),
-        ("Expenses", EXPENSE_COLOR, [r["expenses"] for r in rows]),
-        ("Net", NET_COLOR, [r["income"] - r["expenses"] for r in rows]),
-    ):
-        fig.add_scatter(name=name, x=years, y=[display.major(v) for v in values],
-                        mode="lines+markers", line={"color": color}, hovertemplate=HOVER)
-    if trend:
-        name, trend_rows = trend
-        fig.add_scatter(name=name, x=[str(r["year"]) for r in trend_rows],
-                        y=[display.major(r["value"]) for r in trend_rows],
-                        mode="lines+markers", line={"dash": "dash"}, hovertemplate=HOVER)
-    fig.update_xaxes(type="category")
-    return _style(fig, display)
+PIE_OTHER_THRESHOLD = 0.03  # slices below this share are merged into "Other"
+
+def _pie_figure(pivot: dict[str, dict[str, int]], display: state.Display) -> go.Figure:
+    """Pie of each category's share of the total; small slices are merged into 'Other'."""
+    totals = {label: sum(by_month.values()) for label, by_month in pivot.items()}
+    totals = {label: cents for label, cents in totals.items() if cents > 0}
+    grand_total = sum(totals.values())
+
+    small = [label for label, cents in totals.items() if cents / grand_total < PIE_OTHER_THRESHOLD]
+    if len(small) > 1:  # merging a single slice into "Other" would just rename it
+        other = sum(totals.pop(label) for label in small)
+        totals["Other"] = other
+
+    fig = go.Figure(go.Pie(
+        labels=list(totals),
+        values=[display.major(cents) for cents in totals.values()],
+        sort=False,  # keep biggest-first order, with Other last
+        textinfo="percent",
+        hovertemplate="%{label}: %{value:,.2f} (%{percent})<extra></extra>",
+    ))
+    _style(fig, display)
+    fig.update_layout(height=650, margin={"l": 20, "r": 20, "t": 20, "b": 40})
+    return fig
 
 
 # --------------------------------------------------------------------------
@@ -181,10 +187,7 @@ def _summary_cards(summary: dict[str, Any], display: state.Display) -> None:
                 ui.label(text).classes(f"text-h5 {css}")
 
 
-def _month_table(
-    pivot: dict[str, dict[str, int]], ie_rows: list[dict[str, Any]],
-    year: int, display: state.Display, kind: str,
-) -> None:
+def _month_table(pivot, ie_rows, year, periods, display, kind) -> None:
     """Month x category totals, laid out as Total income, Total expenses, categories, Net.
 
     Every row is colour-scaled around its own monthly average. Category rows follow
@@ -194,7 +197,7 @@ def _month_table(
     whichever kind the category rows show. The Total column of the category rows is
     scaled down the column; the summary rows' grand totals are left uncoloured.
     """
-    months = _months(year)
+    months, names = periods
 
     def fmt(cents: int) -> str:
         return display.money(cents) if cents else "–"
@@ -206,7 +209,7 @@ def _month_table(
     scaled = [m for m in months if year != today.year or m <= this_month]
 
     columns = [{"name": "label", "label": "Category", "field": "label", "align": "left"}]
-    columns += [{"name": m, "label": name, "field": m, "align": "right"} for m, name in zip(months, MONTH_NAMES)]
+    columns += [{"name": m, "label": name, "field": m, "align": "right"} for m, name in zip(months, names)]
     columns.append({"name": "total", "label": "Total", "field": "total", "align": "right"})
 
     reverse = kind == "income"
@@ -289,27 +292,36 @@ async def overview_page() -> None:
             year, category_id, level = year_select.value, category_filter.value, level_toggle.value
             kind = kind_toggle.value
             kind_word = "spending" if kind == "expense" else "income"
+            all_years = year == ALL_YEARS
+            period_word = "Yearly" if all_years else "Monthly"
+            year_text = "all years" if all_years else str(year)
+            periods = _periods(year, years)
 
-            _summary_cards(db.period_summary(user_id, year, category_id), display)
+            _summary_cards(db.period_summary(user_id, None if all_years else year, category_id), display)
 
-            monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
+            if all_years:
+                monthly_rows = db.yearly_by_category(user_id, kind, level, category_id)
+                ie_rows = [
+                    {"month": str(r["year"]), "income": r["income"], "expenses": r["expenses"]}
+                    for r in db.yearly_totals(user_id, category_id)
+                ]
+            else:
+                monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
+                ie_rows = db.monthly_income_expense(user_id, year, category_id)
             pivot = _pivot(monthly_rows)
-            ie_rows = db.monthly_income_expense(user_id, year, category_id)
 
-            # Month x category table (colour-scaled per row)
-            ui.label(f"Month x category totals ({kind_word})").classes("text-h6")
+            ui.label(f"{period_word} totals by category ({kind_word})").classes("text-h6")
             if not pivot:
                 components.info_message("Nothing to show for this selection.", "table_chart")
             else:
-                ui.label("Colours are relative to each row's own monthly average.").classes("text-caption text-grey-7")
-                _month_table(_in_category_order(pivot, category_options), ie_rows, year, display, kind)
+                ui.label("Colours are relative to each row's own average.").classes("text-caption text-grey-7")
+                _month_table(_in_category_order(pivot, category_options), ie_rows, year, periods, display, kind)
 
-            # Monthly breakdown (stacked bars with drill-down)
-            ui.label(f"Monthly {kind_word} by {level}").classes("text-h6")
+            ui.label(f"{period_word} {kind_word} by {level}").classes("text-h6")
             if not pivot:
-                components.info_message(f"No {kind} data for {year} with this selection.", "bar_chart")
+                components.info_message(f"No {kind} data for {year_text} with this selection.", "bar_chart")
             else:
-                fig = _monthly_figure(pivot, year, display)
+                fig = _monthly_figure(pivot, periods, display)
                 ui.label("Click a bar segment to drill into that category.").classes("text-caption text-grey-7")
                 chart = ui.plotly(fig).classes("w-full")
 
@@ -324,35 +336,40 @@ async def overview_page() -> None:
 
                 chart.on("plotly_click", drill_down)
 
-            # Income vs expenses by month
-            ui.label("Income vs expenses by month").classes("text-h6")
+            # Income vs expenses by month/year
+            ui.label(f"Income vs expenses by {'year' if all_years else 'month'}").classes("text-h6")
             if not ie_rows:
-                components.info_message(f"No data for {year} with this selection.", "bar_chart")
+                components.info_message(f"No data for {year_text} with this selection.", "bar_chart")
             else:
-                ui.plotly(_income_expense_figure(ie_rows, year, display)).classes("w-full")
+                ui.plotly(_income_expense_figure(ie_rows, periods, display)).classes("w-full")
 
-            # Yearly trends
-            ui.label("Yearly trends").classes("text-h6")
-            trend = None
-            if trend_select.value is not None:
-                trend_cat = db.get_category(user_id, trend_select.value)
-                if trend_cat:
-                    field = "expenses" if trend_cat["kind"] == "expense" else "income"
-                    trend_rows = [
-                        {"year": r["year"], "value": r[field]}
-                        for r in db.yearly_totals(user_id, trend_select.value)
-                    ]
-                    trend = (f"{category_options[trend_cat['id']]} ({field})", trend_rows)
-            ui.plotly(_yearly_figure(db.yearly_totals(user_id), display, trend)).classes("w-full")
+            # Share of the total (pie with drill-down)
+            ui.label(f"{kind_word.capitalize()} share by {level}, {year_text}").classes("text-h6")
+            if not pivot:
+                components.info_message(f"No {kind} data for {year_text} with this selection.", "pie_chart")
+            else:
+                ui.label("Click a slice to drill into that category.").classes("text-caption text-grey-7")
+                pie = ui.plotly(_pie_figure(pivot, display)).classes("w-full")
+
+                def pie_drill_down(event: Any) -> None:
+                    points = (event.args or {}).get("points") or []
+                    if not points:
+                        return
+                    selected = label_to_id.get(points[0].get("label"))
+                    if selected is not None:  # "Other" has no category, so it does nothing
+                        level_toggle.value = "subcategory"
+                        category_filter.value = selected
+
+                pie.on("plotly_click", pie_drill_down)
 
         # Controls
         with ui.card().classes("w-full"):
             with ui.row().classes("w-full items-center gap-4"):
                 year_select = ui.select(
-                    {y: str(y) for y in years}, label="Year",
+                    {ALL_YEARS: "All years", **{y: str(y) for y in years}}, label="Year",
                     value=current_year if current_year in years else years[-1],
                     on_change=lambda: dashboard.refresh(),
-                ).classes("w-28")
+                ).classes("w-32")
                 category_filter = ui.select(
                     category_options, label="Category filter", clearable=True, with_input=True,
                     on_change=lambda: dashboard.refresh(),

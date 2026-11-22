@@ -24,10 +24,10 @@ CURRENCY_KEY = "display_currency"
 # --------------------------------------------------------------------------
 
 def get_current_user() -> dict[str, Any] | None:
-    """Return the active user, or None if no users exist yet.
+    """Return the active user, or None if none exists or this browser hasn't chosen yet.
 
-    If the remembered user no longer exists (or none was chosen yet), the first
-    user alphabetically becomes the active one.
+    With exactly one user, that user is selected automatically. With several,
+    the browser must choose (see components._build_user_picker).
     """
     users = db.list_users()
     if not users:
@@ -36,8 +36,10 @@ def get_current_user() -> dict[str, Any] | None:
     for user in users:
         if user["id"] == stored:
             return user
-    app.storage.user[USER_KEY] = users[0]["id"]
-    return users[0]
+    if len(users) == 1:
+        app.storage.user[USER_KEY] = users[0]["id"]
+        return users[0]
+    return None
 
 
 def set_current_user(user_id: int) -> None:
