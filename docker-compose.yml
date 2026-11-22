@@ -1,7 +1,7 @@
 services:
   finance-tracker:
     build: .
-    container_name: finance-tracker
+    container_name: lantern
     restart: unless-stopped
     ports:
       # There is no login. On a server, prefer binding to localhost and putting a

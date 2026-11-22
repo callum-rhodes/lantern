@@ -20,7 +20,7 @@ import db
 import rates
 import state
 
-APP_TITLE = "Finance Tracker"
+APP_TITLE = "Lantern"
 NAV_LINKS: list[tuple[str, str]] = [
     ("Overview", "/"),
     ("Add Transactions", "/transactions"),

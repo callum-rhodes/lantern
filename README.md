@@ -1,6 +1,8 @@
-# Finance Tracker
+# Lantern
 
-A small, locally hosted personal finance tracker. Python, [NiceGUI](https://nicegui.io) for the whole UI, SQLite for storage, Plotly for charts.
+*A light on where your money goes.*
+
+Lantern is a small, self-hosted personal finance tracker for your home network. Python, [NiceGUI](https://nicegui.io) for the whole UI, SQLite for storage, Plotly for charts.
 
 - Multiple named users, each with their own transactions and categories (no passwords). Each device is asked which user to view the first time it visits (skipped when there is only one user)
 - Two-level categories (category > subcategory), income and expense, in an order you choose
@@ -28,7 +30,7 @@ A small, locally hosted personal finance tracker. Python, [NiceGUI](https://nice
 ## Install and run
 
 ```bash
-cd finance_tracker
+cd lantern
 
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -178,7 +180,7 @@ Amounts in the file are read as the base currency. The import is all-or-nothing:
 ## Project structure
 
 ```
-finance_tracker/
+lantern/
   main.py            entry point: options, route registration, ui.run()
   db.py              connection handling, schema, ALL SQL queries, backups, demo data
   rates.py           exchange-rate fetching/caching, money parsing and formatting
