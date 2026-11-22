@@ -1,4 +1,4 @@
-"""Categories page: view, add, rename and delete categories and subcategories.
+"""Categories page: view, add, rename, reorder and delete categories and subcategories.
 
 Two levels only: a top-level category has a kind (income/expense) and its
 subcategories inherit it. The two-level limit is enforced in ``db.add_category``
@@ -95,9 +95,10 @@ def _delete_category(user_id: int, category: dict[str, Any], refresh: Callable[[
     dialog.open()
 
 
-def _icon_button(icon: str, tooltip: str, on_click: Callable[[], None]) -> None:
+def _icon_button(icon: str, tooltip: str, on_click: Callable[[], None], enabled: bool = True) -> None:
     """A small flat icon button with a tooltip."""
-    ui.button(icon=icon, on_click=on_click).props("flat round dense").tooltip(tooltip)
+    button = ui.button(icon=icon, on_click=on_click).props("flat round dense").tooltip(tooltip)
+    button.set_enabled(enabled)
 
 
 @ui.page("/categories")
@@ -121,11 +122,15 @@ async def categories_page() -> None:
             if not tops:
                 components.info_message(f"No {kind} categories yet.")
                 continue
-            for top in tops:
+            for index, top in enumerate(tops):
                 with ui.card().classes("w-full"):
                     with ui.row().classes("w-full items-center justify-between"):
                         ui.label(top["name"]).classes("text-subtitle1 text-bold")
                         with ui.row().classes("gap-1"):
+                            _icon_button("arrow_upward", "Move up", lambda c=top: move(c, -1),
+                                         enabled=index > 0)
+                            _icon_button("arrow_downward", "Move down", lambda c=top: move(c, 1),
+                                         enabled=index < len(tops) - 1)
                             _icon_button("add", "Add subcategory",
                                          lambda t=top: add_subcategory(t))
                             _icon_button("edit", "Rename", lambda c=top: rename(c))
@@ -133,14 +138,27 @@ async def categories_page() -> None:
                                          lambda c=top: _delete_category(user_id, c, category_list.refresh))
                     if not top["children"]:
                         ui.label("No subcategories").classes("text-caption text-grey-7 q-pl-md")
-                    for child in top["children"]:
+                    for child_index, child in enumerate(top["children"]):
                         child = {**child, "parent_name": top["name"]}
                         with ui.row().classes("w-full items-center justify-between q-pl-md"):
                             ui.label(child["name"])
                             with ui.row().classes("gap-1"):
+                                _icon_button("arrow_upward", "Move up", lambda c=child: move(c, -1),
+                                             enabled=child_index > 0)
+                                _icon_button("arrow_downward", "Move down", lambda c=child: move(c, 1),
+                                             enabled=child_index < len(top["children"]) - 1)
                                 _icon_button("edit", "Rename", lambda c=child: rename(c))
                                 _icon_button("delete", "Delete",
                                              lambda c=child: _delete_category(user_id, c, category_list.refresh))
+
+    def move(category: dict[str, Any], direction: int) -> None:
+        """Move a category up (-1) or down (+1) within its group."""
+        try:
+            db.move_category(user_id, category["id"], direction)
+        except db.DataError as exc:
+            components.notify_error(exc)
+            return
+        category_list.refresh()
 
     def add_subcategory(parent: dict[str, Any]) -> None:
         def submit(name: str) -> None:

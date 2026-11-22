@@ -41,6 +41,51 @@ def _pivot(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return dict(sorted(table.items(), key=lambda item: (-sum(item[1].values()), item[0])))
 
 
+def _in_category_order(
+    pivot: dict[str, dict[str, int]], category_options: dict[int, str]
+) -> dict[str, dict[str, int]]:
+    """Reorder pivot rows to match the category order set on the Categories page.
+
+    ``category_options`` (from ``db.category_options``) lists each category followed
+    by its subcategories, e.g. 'Food', 'Food > Groceries', 'Food > Restaurants', so
+    its order is the user's own order and keeps subcategories grouped under their parent.
+    Labels not found there (should not happen) go last.
+    """
+    position = {label: i for i, label in enumerate(category_options.values())}
+    return dict(sorted(pivot.items(), key=lambda item: position.get(item[0], len(position))))
+
+
+# Per-row diverging scale (RGB): green = good, white = the row's average, red = bad.
+GREEN = (99, 190, 123)
+NEUTRAL = (255, 255, 255)
+RED = (248, 105, 107)
+
+
+def _row_colours(values: list[int], reverse: bool) -> list[str]:
+    """CSS background colour per value, diverging around the row's mean.
+
+    Below-average values are green and above-average values red (swapped when
+    ``reverse`` is set, e.g. for income). Intensity grows with the distance from
+    the mean relative to the largest deviation in the row, so every row uses the
+    full colour range. A row with no variation gets the neutral colour throughout.
+    """
+    if not values:
+        return []
+    mean = sum(values) / len(values)
+    max_dev = max(abs(v - mean) for v in values)
+    below, above = (RED, GREEN) if reverse else (GREEN, RED)
+    colours = []
+    for value in values:
+        if max_dev == 0:
+            colours.append("rgb({}, {}, {})".format(*NEUTRAL))
+            continue
+        t = (value - mean) / max_dev  # -1 .. +1
+        target = above if t > 0 else below
+        mixed = [round(n + (c - n) * abs(t)) for n, c in zip(NEUTRAL, target)]
+        colours.append("rgb({}, {}, {})".format(*mixed))
+    return colours
+
+
 # --------------------------------------------------------------------------
 # Figures
 # --------------------------------------------------------------------------
@@ -136,27 +181,68 @@ def _summary_cards(summary: dict[str, Any], display: state.Display) -> None:
                 ui.label(text).classes(f"text-h5 {css}")
 
 
-def _month_table(pivot: dict[str, dict[str, int]], year: int, display: state.Display) -> None:
-    """Month x category totals, with a total column and a total row."""
+def _month_table(pivot: dict[str, dict[str, int]], year: int, display: state.Display, kind: str) -> None:
+    """Month x category totals, with a total column and a total row.
+
+    Each category row is colour-scaled around its own monthly average: green for
+    low and red for high expenses (reversed for income). The Total column is scaled
+    down the column (across categories) and the Total row across the months, with a
+    bold divider above it. The bottom-right grand total is left uncoloured.
+    """
     months = _months(year)
 
     def fmt(cents: int) -> str:
         return display.money(cents) if cents else "–"
 
+    # Only colour months that have happened, so empty future months in the current
+    # year don't drag the row average down.
+    today = date.today()
+    this_month = f"{today.year}-{today.month:02d}"
+    scaled = [m for m in months if year != today.year or m <= this_month]
+
     columns = [{"name": "label", "label": "Category", "field": "label", "align": "left"}]
     columns += [{"name": m, "label": name, "field": m, "align": "right"} for m, name in zip(months, MONTH_NAMES)]
     columns.append({"name": "total", "label": "Total", "field": "total", "align": "right"})
 
-    rows = [
-        {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months}, "total": fmt(sum(by_month.values()))}
-        for label, by_month in pivot.items()
-    ]
+    reverse = kind == "income"
+    rows = []
+    for label, by_month in pivot.items():
+        row = {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months}, "total": fmt(sum(by_month.values()))}
+        colours = _row_colours([by_month.get(m, 0) for m in scaled], reverse)
+        row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
+        rows.append(row)
+
+    # Total column: scaled vertically, across the category rows.
+    for row, colour in zip(rows, _row_colours([sum(by.values()) for by in pivot.values()], reverse)):
+        row["_bg_total"] = colour
+
+    # Total row: scaled across the months, and flagged so it gets a bold divider.
     month_totals = {m: sum(by.get(m, 0) for by in pivot.values()) for m in months}
-    rows.append({
+    total_row = {
         "label": "Total", **{m: fmt(month_totals[m]) for m in months},
-        "total": fmt(sum(month_totals.values())),
-    })
-    ui.table(columns=columns, rows=rows, row_key="label", pagination=0).props("flat bordered dense hide-bottom").classes("w-full")
+        "total": fmt(sum(month_totals.values())), "_is_total": True,
+    }
+    total_colours = _row_colours([month_totals[m] for m in scaled], reverse)
+    total_row.update({f"_bg_{m}": colour for m, colour in zip(scaled, total_colours)})
+    rows.append(total_row)
+
+    table = ui.table(columns=columns, rows=rows, row_key="label", pagination=0)
+    table.props("flat bordered dense hide-bottom").classes("w-full")
+    # Per-cell background (black text keeps coloured cells readable in dark mode); the
+    # total row also gets a bold top border and bold text so it reads as separate.
+    table.add_slot("body-cell", r"""
+        <q-td :props="props"
+              :style="[
+                  props.row['_bg_' + props.col.name]
+                      ? {backgroundColor: props.row['_bg_' + props.col.name], color: '#000'}
+                      : {},
+                  props.row._is_total
+                      ? {borderTop: '3px solid #757575', fontWeight: 'bold'}
+                      : {},
+              ]">
+            {{ props.value }}
+        </q-td>
+    """)
 
 
 @ui.page("/overview")
@@ -186,10 +272,19 @@ async def overview_page() -> None:
 
             _summary_cards(db.period_summary(user_id, year, category_id), display)
 
-            # Monthly breakdown (stacked bars with drill-down)
-            ui.label(f"Monthly {kind_word} by {level}").classes("text-h6")
             monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
             pivot = _pivot(monthly_rows)
+
+            # Month x category table (colour-scaled per row)
+            ui.label(f"Month x category totals ({kind_word})").classes("text-h6")
+            if not pivot:
+                components.info_message("Nothing to show for this selection.", "table_chart")
+            else:
+                ui.label("Colours are relative to each row's own monthly average.").classes("text-caption text-grey-7")
+                _month_table(_in_category_order(pivot, category_options), year, display, kind)
+
+            # Monthly breakdown (stacked bars with drill-down)
+            ui.label(f"Monthly {kind_word} by {level}").classes("text-h6")
             if not pivot:
                 components.info_message(f"No {kind} data for {year} with this selection.", "bar_chart")
             else:
@@ -229,13 +324,6 @@ async def overview_page() -> None:
                     ]
                     trend = (f"{category_options[trend_cat['id']]} ({field})", trend_rows)
             ui.plotly(_yearly_figure(db.yearly_totals(user_id), display, trend)).classes("w-full")
-
-            # Month x category table
-            ui.label(f"Month x category totals ({kind_word})").classes("text-h6")
-            if not pivot:
-                components.info_message("Nothing to show for this selection.", "table_chart")
-            else:
-                _month_table(pivot, year, display)
 
         # Controls
         with ui.card().classes("w-full"):

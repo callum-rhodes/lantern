@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS categories (
     user_id   INTEGER NOT NULL REFERENCES users(id),
     name      TEXT NOT NULL,
     parent_id INTEGER REFERENCES categories(id),
-    kind      TEXT NOT NULL CHECK (kind IN ('income', 'expense'))
+    kind      TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
+    -- Position among siblings (same parent), lowest first. Set on the Categories page.
+    sort_order INTEGER NOT NULL DEFAULT 0
 );
 
 -- Unique on (user, parent, name). COALESCE makes top-level categories
@@ -131,11 +133,30 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Upgrade databases created by older versions of the app."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
+    if "sort_order" not in columns:
+        conn.execute("ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        # Number existing categories alphabetically within each parent, so nothing
+        # visibly changes until the user starts rearranging.
+        counters: dict[tuple[int, int | None], int] = {}
+        rows = conn.execute(
+            "SELECT id, user_id, parent_id FROM categories "
+            "ORDER BY user_id, COALESCE(parent_id, 0), name COLLATE NOCASE"
+        ).fetchall()
+        for row in rows:
+            key = (row["user_id"], row["parent_id"])
+            counters[key] = counters.get(key, 0) + 1
+            conn.execute("UPDATE categories SET sort_order = ? WHERE id = ?", (counters[key], row["id"]))
+
+
 def init_db() -> None:
-    """Create all tables and indexes if they do not exist yet."""
+    """Create all tables and indexes if they do not exist yet, and upgrade old databases."""
     with connect() as conn:
         conn.execute("PRAGMA journal_mode = WAL")  # nicer with several browsers at once
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def _all(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
@@ -234,10 +255,13 @@ def add_user(name: str) -> int:
 def _insert_category(
     conn: sqlite3.Connection, user_id: int, name: str, parent_id: int | None, kind: str
 ) -> int:
-    """Raw insert; callers are responsible for validation."""
+    """Raw insert, placed after its siblings; callers are responsible for validation."""
     cur = conn.execute(
-        "INSERT INTO categories(user_id, name, parent_id, kind) VALUES (?, ?, ?, ?)",
-        (user_id, name, parent_id, kind),
+        "INSERT INTO categories(user_id, name, parent_id, kind, sort_order) "
+        "VALUES (?, ?, ?, ?, ("
+        "  SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories "
+        "  WHERE user_id = ? AND COALESCE(parent_id, 0) = COALESCE(?, 0)))",
+        (user_id, name, parent_id, kind, user_id, parent_id),
     )
     return int(cur.lastrowid)
 
@@ -254,12 +278,19 @@ def get_category(user_id: int, category_id: int) -> dict[str, Any] | None:
 
 
 def list_categories(user_id: int) -> list[dict[str, Any]]:
-    """Every category of the user, ordered by kind then name."""
+    """Every category of the user in the user's own order.
+
+    Ordered by kind, then top-level position, with each category followed by its
+    subcategories in their own order (see ``move_category``).
+    """
     with connect() as conn:
         return _all(conn.execute(
             "SELECT c.id, c.name, c.parent_id, c.kind, p.name AS parent_name "
             "FROM categories c LEFT JOIN categories p ON p.id = c.parent_id "
-            "WHERE c.user_id = ? ORDER BY c.kind, c.name COLLATE NOCASE",
+            "WHERE c.user_id = ? "
+            "ORDER BY c.kind, COALESCE(p.sort_order, c.sort_order), "
+            "         CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END, "
+            "         c.sort_order, c.name COLLATE NOCASE",
             (user_id,),
         ))
 
@@ -285,7 +316,7 @@ def list_subcategories(user_id: int, parent_id: int) -> list[dict[str, Any]]:
     with connect() as conn:
         return _all(conn.execute(
             "SELECT id, name, parent_id, kind FROM categories "
-            "WHERE user_id = ? AND parent_id = ? ORDER BY name COLLATE NOCASE",
+            "WHERE user_id = ? AND parent_id = ? ORDER BY sort_order, name COLLATE NOCASE",
             (user_id, parent_id),
         ))
 
@@ -349,6 +380,40 @@ def rename_category(user_id: int, category_id: int, new_name: str) -> None:
             raise DataError(f"'{new_name}' already exists here.") from exc
         if cur.rowcount == 0:
             raise DataError("Category not found.")
+
+
+def move_category(user_id: int, category_id: int, direction: int) -> bool:
+    """Move a category one step up (``direction=-1``) or down (``+1``) among its siblings.
+
+    Top-level categories move among those of the same kind; subcategories move
+    within their parent. Returns False if it is already first/last.
+    """
+    if direction not in (-1, 1):
+        raise ValueError("direction must be -1 (up) or 1 (down)")
+    with connect() as conn:
+        cat = conn.execute(
+            "SELECT id, parent_id, kind FROM categories WHERE id = ? AND user_id = ?",
+            (category_id, user_id),
+        ).fetchone()
+        if cat is None:
+            raise DataError("Category not found.")
+        siblings = [row["id"] for row in conn.execute(
+            "SELECT id FROM categories "
+            "WHERE user_id = ? AND COALESCE(parent_id, 0) = COALESCE(?, 0) AND kind = ? "
+            "ORDER BY sort_order, name COLLATE NOCASE",
+            (user_id, cat["parent_id"], cat["kind"]),
+        )]
+        index = siblings.index(category_id)
+        target = index + direction
+        if not 0 <= target < len(siblings):
+            return False
+        siblings[index], siblings[target] = siblings[target], siblings[index]
+        # Renumber the whole group so the order stays valid even if values were equal.
+        conn.executemany(
+            "UPDATE categories SET sort_order = ? WHERE id = ? AND user_id = ?",
+            [(position, cid, user_id) for position, cid in enumerate(siblings, start=1)],
+        )
+    return True
 
 
 def category_usage(user_id: int, category_id: int) -> dict[str, int]:
