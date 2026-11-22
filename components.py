@@ -22,9 +22,12 @@ import state
 
 APP_TITLE = "Finance Tracker"
 NAV_LINKS: list[tuple[str, str]] = [
-    ("Transactions", "/"),
-    ("Overview", "/overview"),
-    ("Categories", "/categories"),
+    ("Overview", "/"),
+    ("Add Transactions", "/transactions"),
+    ("Edit Categories", "/categories"),
+    ("Export CSV", "/export"),
+    ("Import CSV", "/import"),
+    ("Backups", "/backups"),
 ]
 
 

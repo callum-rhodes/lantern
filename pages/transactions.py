@@ -119,7 +119,7 @@ class TransactionForm:
         self.description.value = ""
 
 
-@ui.page("/")
+@ui.page("/transactions")
 async def transactions_page() -> None:
     """Render the transactions page."""
     ctx = await components.build_layout("Transactions")

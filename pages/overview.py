@@ -181,13 +181,18 @@ def _summary_cards(summary: dict[str, Any], display: state.Display) -> None:
                 ui.label(text).classes(f"text-h5 {css}")
 
 
-def _month_table(pivot: dict[str, dict[str, int]], year: int, display: state.Display, kind: str) -> None:
-    """Month x category totals, with a total column and a total row.
+def _month_table(
+    pivot: dict[str, dict[str, int]], ie_rows: list[dict[str, Any]],
+    year: int, display: state.Display, kind: str,
+) -> None:
+    """Month x category totals, laid out as Total income, Total expenses, categories, Net.
 
-    Each category row is colour-scaled around its own monthly average: green for
-    low and red for high expenses (reversed for income). The Total column is scaled
-    down the column (across categories) and the Total row across the months, with a
-    bold divider above it. The bottom-right grand total is left uncoloured.
+    Every row is colour-scaled around its own monthly average. Category rows follow
+    ``kind`` (low spending is green, high income is green). In the summary rows,
+    income and net are green when high and expenses are green when low. The summary
+    rows always cover income and expenses together (respecting the category filter),
+    whichever kind the category rows show. The Total column of the category rows is
+    scaled down the column; the summary rows' grand totals are left uncoloured.
     """
     months = _months(year)
 
@@ -205,40 +210,54 @@ def _month_table(pivot: dict[str, dict[str, int]], year: int, display: state.Dis
     columns.append({"name": "total", "label": "Total", "field": "total", "align": "right"})
 
     reverse = kind == "income"
-    rows = []
+
+    # Category rows.
+    category_rows = []
     for label, by_month in pivot.items():
         row = {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months}, "total": fmt(sum(by_month.values()))}
         colours = _row_colours([by_month.get(m, 0) for m in scaled], reverse)
         row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
-        rows.append(row)
+        category_rows.append(row)
 
-    # Total column: scaled vertically, across the category rows.
-    for row, colour in zip(rows, _row_colours([sum(by.values()) for by in pivot.values()], reverse)):
+    # Total column of the category rows: scaled vertically, across the categories.
+    for row, colour in zip(category_rows, _row_colours([sum(by.values()) for by in pivot.values()], reverse)):
         row["_bg_total"] = colour
 
-    # Total row: scaled across the months, and flagged so it gets a bold divider.
-    month_totals = {m: sum(by.get(m, 0) for by in pivot.values()) for m in months}
-    total_row = {
-        "label": "Total", **{m: fmt(month_totals[m]) for m in months},
-        "total": fmt(sum(month_totals.values())), "_is_total": True,
-    }
-    total_colours = _row_colours([month_totals[m] for m in scaled], reverse)
-    total_row.update({f"_bg_{m}": colour for m, colour in zip(scaled, total_colours)})
-    rows.append(total_row)
+    # Summary rows (always both kinds).
+    by_month = {r["month"]: r for r in ie_rows}
+    income = {m: by_month.get(m, {}).get("income", 0) for m in months}
+    expenses = {m: by_month.get(m, {}).get("expenses", 0) for m in months}
+    net = {m: income[m] - expenses[m] for m in months}
+
+    def summary_row(label: str, values: dict[str, int], reverse_row: bool, **flags: bool) -> dict[str, Any]:
+        row = {
+            "label": label, **{m: fmt(values[m]) for m in months},
+            "total": fmt(sum(values.values())), "_is_total": True, **flags,
+        }
+        colours = _row_colours([values[m] for m in scaled], reverse_row)
+        row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
+        return row
+
+    rows = [
+        summary_row("Total income", income, True),                           # high is good
+        summary_row("Total expenses", expenses, False, _divider_below=True),  # high is bad
+        *category_rows,
+        summary_row("Net", net, True, _divider_above=True),                  # high is good
+    ]
 
     table = ui.table(columns=columns, rows=rows, row_key="label", pagination=0)
     table.props("flat bordered dense hide-bottom").classes("w-full")
-    # Per-cell background (black text keeps coloured cells readable in dark mode); the
-    # total row also gets a bold top border and bold text so it reads as separate.
+    # Per-cell background (black text keeps coloured cells readable in dark mode).
+    # Summary rows are bold, with a thick divider under the expenses row and above Net.
     table.add_slot("body-cell", r"""
         <q-td :props="props"
               :style="[
                   props.row['_bg_' + props.col.name]
                       ? {backgroundColor: props.row['_bg_' + props.col.name], color: '#000'}
                       : {},
-                  props.row._is_total
-                      ? {borderTop: '3px solid #757575', fontWeight: 'bold'}
-                      : {},
+                  props.row._is_total ? {fontWeight: 'bold'} : {},
+                  props.row._divider_below ? {borderBottom: '3px solid #757575'} : {},
+                  props.row._divider_above ? {borderTop: '3px solid #757575'} : {},
               ]">
             {{ props.value }}
         </q-td>
@@ -246,6 +265,7 @@ def _month_table(pivot: dict[str, dict[str, int]], year: int, display: state.Dis
 
 
 @ui.page("/overview")
+@ui.page("/")
 async def overview_page() -> None:
     """Render the overview page."""
     ctx = await components.build_layout("Overview")
@@ -274,6 +294,7 @@ async def overview_page() -> None:
 
             monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
             pivot = _pivot(monthly_rows)
+            ie_rows = db.monthly_income_expense(user_id, year, category_id)
 
             # Month x category table (colour-scaled per row)
             ui.label(f"Month x category totals ({kind_word})").classes("text-h6")
@@ -281,7 +302,7 @@ async def overview_page() -> None:
                 components.info_message("Nothing to show for this selection.", "table_chart")
             else:
                 ui.label("Colours are relative to each row's own monthly average.").classes("text-caption text-grey-7")
-                _month_table(_in_category_order(pivot, category_options), year, display, kind)
+                _month_table(_in_category_order(pivot, category_options), ie_rows, year, display, kind)
 
             # Monthly breakdown (stacked bars with drill-down)
             ui.label(f"Monthly {kind_word} by {level}").classes("text-h6")
@@ -305,7 +326,6 @@ async def overview_page() -> None:
 
             # Income vs expenses by month
             ui.label("Income vs expenses by month").classes("text-h6")
-            ie_rows = db.monthly_income_expense(user_id, year, category_id)
             if not ie_rows:
                 components.info_message(f"No data for {year} with this selection.", "bar_chart")
             else:

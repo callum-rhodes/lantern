@@ -19,6 +19,7 @@ import logging
 import os
 import random
 import sqlite3
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -28,18 +29,23 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "finance.db"
+DEFAULT_BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 DEFAULT_BASE_CURRENCY = "GBP"
 KINDS = ("income", "expense")
 
 # (category, kind, [subcategories]) created for every new user.
 DEFAULT_CATEGORIES: list[tuple[str, str, list[str]]] = [
-    ("Housing", "expense", ["Rent", "Utilities"]),
-    ("Food", "expense", ["Groceries", "Eating out"]),
-    ("Transport", "expense", ["Fuel", "Public transport"]),
-    ("Leisure", "expense", ["Entertainment", "Holidays"]),
-    ("Health", "expense", ["Medical", "Fitness"]),
-    ("Shopping", "expense", ["Clothing", "Household"]),
-    ("Income", "income", ["Salary", "Other income"]),
+    ('Home', 'expense', ['Rent/Mortgage', 'Gas/Electric', 'Water', 'Internet', 'Phone', 'Insurance', 'Furniture/Appliances', 'Maintenance/Supplies', 'Improvements', 'Other']),
+    ('Transport', 'expense', ['Vehicle payments (inc. repairs)', 'Insurance/Tax/MOT', 'Fuel', 'Public transport', 'Parking', 'Fines', 'Other']),
+    ('Food', 'expense', ['Groceries', 'Eating out', 'Pub/Bar/Cafe', 'Other']),
+    ('Leisure', 'expense', ['Subscriptions', 'Events', 'Sports', 'Games', 'Hobbies', 'Other']),
+    ('Health', 'expense', ['Fitness', 'Medical', 'Beauty', 'Other']),
+    ('Shopping', 'expense', ['Clothing', 'Toys/Gadgets', 'Gifts', 'Other']),
+    ('Holiday', 'expense', ['Transport', 'Hotels', 'Food', 'Shopping', 'Activities', 'Other']),
+    ('Pet', 'expense', ['Food/Litter/Treats', 'Vet', 'Toys', 'Boarding', 'Other']),
+    ('Work Expenses', 'expense', ['Food', 'Transport', 'Other']),
+    ('Miscellaneous', 'expense', ['Charity', 'Education', 'Other']),
+    ('Income', 'income', ['Salary', 'Interest', 'Reimbursements', 'Personal Sales', 'Other']),
 ]
 
 SCHEMA = """
@@ -595,6 +601,66 @@ def transaction_count(user_id: int) -> int:
             "SELECT COUNT(*) FROM transactions WHERE user_id = ?", (user_id,)
         ).fetchone()[0]
 
+# Paste this block into db.py, just above the "Aggregations for the overview page" section.
+
+def description_category_map(user_id: int) -> dict[tuple[str, str], int]:
+    """Most-used category per (lower-cased description, kind), for matching imported rows."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT LOWER(TRIM(t.description)) AS d, c.kind, t.category_id, COUNT(*) AS n "
+            "FROM transactions t JOIN categories c ON c.id = t.category_id "
+            "WHERE t.user_id = ? AND TRIM(t.description) <> '' "
+            "GROUP BY d, c.kind, t.category_id ORDER BY n ASC",  # most common ends up last, wins
+            (user_id,),
+        ).fetchall()
+    return {(r["d"], r["kind"]): r["category_id"] for r in rows}
+
+
+def _existing_keys(
+    conn: sqlite3.Connection, user_id: int, date_from: str, date_to: str
+) -> set[tuple[str, int, int]]:
+    """(date, amount_cents, category_id) of existing transactions in a date range."""
+    return {
+        (r["date"], r["amount_cents"], r["category_id"])
+        for r in conn.execute(
+            "SELECT date, amount_cents, category_id FROM transactions "
+            "WHERE user_id = ? AND date >= ? AND date <= ?",
+            (user_id, date_from, date_to),
+        )
+    }
+
+
+def existing_keys(user_id: int, date_from: str, date_to: str) -> set[tuple[str, int, int]]:
+    """Used by the import preview to flag rows that already exist."""
+    with connect() as conn:
+        return _existing_keys(conn, user_id, date_from, date_to)
+
+
+def import_transactions(
+    user_id: int, rows: list[tuple[str, int, int, str]], skip_duplicates: bool = False
+) -> dict[str, int]:
+    """Insert many (date, signed cents, category_id, description) rows in one transaction.
+
+    With ``skip_duplicates`` a row is skipped if a transaction with the same date, amount
+    and category already existed before the import. Any invalid row cancels the whole import.
+    """
+    added = skipped = 0
+    with connect() as conn:
+        existing: set[tuple[str, int, int]] = set()
+        if skip_duplicates and rows:
+            existing = _existing_keys(conn, user_id, min(r[0] for r in rows), max(r[0] for r in rows))
+        for tx_date, cents, category_id, description in rows:
+            iso = _check_transaction(conn, user_id, tx_date, cents, category_id)
+            if (iso, cents, category_id) in existing:
+                skipped += 1
+                continue
+            conn.execute(
+                "INSERT INTO transactions(user_id, date, amount_cents, category_id, description) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, iso, cents, category_id, (description or "").strip()),
+            )
+            added += 1
+    return {"added": added, "skipped": skipped}
 
 # --------------------------------------------------------------------------
 # Aggregations for the overview page (all values in base-currency minor units)
@@ -736,6 +802,145 @@ def load_rates(base: str) -> tuple[dict[str, float], str | None]:
         return {}, None
     return {r["target"]: r["rate"] for r in rows}, max(r["fetched_at"] for r in rows)
 
+# --------------------------------------------------------------------------
+# Backups
+# --------------------------------------------------------------------------
+# A backup is a complete copy of the SQLite file made with SQLite's own backup
+# API, which is safe while the app is running. Restoring copies a backup back
+# over the live database the same way, after first saving a "pre-restore" copy
+# of what is there now.
+
+REQUIRED_TABLES = {"users", "categories", "transactions", "settings"}
+_BACKUP_NAME = re.compile(r"^[\w][\w .\-]*\.db$")
+
+
+def get_backup_dir() -> Path:
+    """Folder holding backups (``FINANCE_BACKUP_DIR`` overrides ``backups/`` next to main.py)."""
+    path = Path(os.environ.get("FINANCE_BACKUP_DIR", DEFAULT_BACKUP_DIR))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _copy_database(source: Path, dest: Path) -> None:
+    """Copy one SQLite database over another using SQLite's online backup API."""
+    src = dst = None
+    try:
+        src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        dst = sqlite3.connect(dest, timeout=10)
+        src.backup(dst)
+    except sqlite3.Error as exc:
+        log.exception("Database copy failed")
+        raise DataError("Copying the database failed. Check the server log for details.") from exc
+    finally:
+        if dst is not None:
+            dst.close()
+        if src is not None:
+            src.close()
+
+
+def create_backup(prefix: str = "finance") -> str:
+    """Save the live database as ``<prefix>-YYYYMMDD-HHMMSS.db``; return the file name."""
+    folder = get_backup_dir()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = folder / f"{prefix}-{stamp}.db"
+    counter = 1
+    while target.exists():  # two backups in the same second
+        counter += 1
+        target = folder / f"{prefix}-{stamp}-{counter}.db"
+    _copy_database(get_db_path(), target)
+    return target.name
+
+
+def resolve_backup(name: str) -> Path:
+    """Path of an existing backup file; only plain file names inside the backup folder pass."""
+    folder = get_backup_dir().resolve()
+    path = (folder / name).resolve()
+    if not _BACKUP_NAME.match(name) or path.parent != folder or not path.is_file():
+        raise DataError("That backup file no longer exists.")
+    return path
+
+
+def check_backup_file(path: Path) -> dict[str, int]:
+    """Make sure ``path`` is a healthy finance database; return its user/transaction counts."""
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error as exc:
+        raise DataError("That file is not a valid database.") from exc
+    try:
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if not REQUIRED_TABLES <= tables:
+                raise DataError("That file is a database, but not a Finance Tracker backup.")
+            if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise DataError("That backup file is damaged (it failed the integrity check).")
+            return {
+                "users": conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+                "transactions": conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0],
+            }
+        except sqlite3.Error as exc:
+            raise DataError("That file is not a valid database.") from exc
+    finally:
+        conn.close()
+
+
+def list_backups() -> list[dict[str, Any]]:
+    """Backups in the backup folder, newest first."""
+    items = []
+    for path in get_backup_dir().glob("*.db"):
+        if not _BACKUP_NAME.match(path.name):
+            continue
+        info = path.stat()
+        items.append({
+            "name": path.name,
+            "size": info.st_size,
+            "modified": datetime.fromtimestamp(info.st_mtime),
+        })
+    return sorted(items, key=lambda item: item["modified"], reverse=True)
+
+
+def import_backup_file(temp_path: Path, original_name: str) -> str:
+    """Validate an uploaded database file and keep it in the backup folder; return its name.
+
+    The file is stored as ``uploaded-<original name>`` (numbered if that exists).
+    The temporary file is removed either way.
+    """
+    try:
+        check_backup_file(temp_path)
+        stem = re.sub(r"[^\w .\-]", "_", Path(original_name).stem).strip(" .") or "backup"
+        folder = get_backup_dir()
+        target = folder / f"uploaded-{stem}.db"
+        counter = 1
+        while target.exists():
+            counter += 1
+            target = folder / f"uploaded-{stem}-{counter}.db"
+        temp_path.replace(target)
+        return target.name
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def restore_backup(name: str) -> str:
+    """Replace the live database with a backup; return the name of the safety copy.
+
+    The current data is first saved as ``pre-restore-<timestamp>.db``, so a restore
+    can itself be undone. The browser-signing secret is kept, so open browsers
+    stay signed in to their chosen user/currency, and the schema is brought up to
+    date in case the backup came from an older version of the app.
+    """
+    path = resolve_backup(name)
+    check_backup_file(path)
+    safety = create_backup("pre-restore")
+    secret = get_setting("storage_secret")
+    _copy_database(path, get_db_path())
+    init_db()
+    if secret:
+        set_setting("storage_secret", secret)
+    return safety
+
+
+def delete_backup(name: str) -> None:
+    """Delete one backup file."""
+    resolve_backup(name).unlink()
 
 # --------------------------------------------------------------------------
 # Demo data
