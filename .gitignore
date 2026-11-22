@@ -1,7 +1,12 @@
 # Tracker-specific files
 .nicegui
 backups/*
-finance.db
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+data/
+*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
