@@ -187,7 +187,7 @@ def _summary_cards(summary: dict[str, Any], display: state.Display) -> None:
                 ui.label(text).classes(f"text-h5 {css}")
 
 
-def _month_table(pivot, ie_rows, year, periods, display, kind) -> None:
+def _month_table(pivot, ie_rows, year, periods, display, kind, level="category") -> None:
     """Month x category totals, laid out as Total income, Total expenses, categories, Net.
 
     Every row is colour-scaled around its own monthly average. Category rows follow
@@ -216,10 +216,15 @@ def _month_table(pivot, ie_rows, year, periods, display, kind) -> None:
 
     # Category rows.
     category_rows = []
+    previous_group = None
     for label, by_month in pivot.items():
         row = {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months}, "total": fmt(sum(by_month.values()))}
         colours = _row_colours([by_month.get(m, 0) for m in scaled], reverse)
         row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
+        group = label.split(" > ")[0]  # 'Food > Groceries' -> 'Food'
+        if level == "subcategory" and previous_group is not None and group != previous_group:
+            row["_group_start"] = True
+        previous_group = group
         category_rows.append(row)
 
     # Total column of the category rows: scaled vertically, across the categories.
@@ -261,6 +266,7 @@ def _month_table(pivot, ie_rows, year, periods, display, kind) -> None:
                   props.row._is_total ? {fontWeight: 'bold'} : {},
                   props.row._divider_below ? {borderBottom: '3px solid #757575'} : {},
                   props.row._divider_above ? {borderTop: '3px solid #757575'} : {},
+                  props.row._group_start ? {borderTop: '2px solid #9e9e9e'} : {},
               ]">
             {{ props.value }}
         </q-td>
@@ -315,7 +321,7 @@ async def overview_page() -> None:
                 components.info_message("Nothing to show for this selection.", "table_chart")
             else:
                 ui.label("Colours are relative to each row's own average.").classes("text-caption text-grey-7")
-                _month_table(_in_category_order(pivot, category_options), ie_rows, year, periods, display, kind)
+                _month_table(_in_category_order(pivot, category_options), ie_rows, year, periods, display, kind, level)
 
             ui.label(f"{period_word} {kind_word} by {level}").classes("text-h6")
             if not pivot:
