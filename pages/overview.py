@@ -59,6 +59,38 @@ def _in_category_order(
     position = {label: i for i, label in enumerate(category_options.values())}
     return dict(sorted(pivot.items(), key=lambda item: position.get(item[0], len(position))))
 
+def _completed_months(year: int, years: list[int]) -> list[str]:
+    """Months ('YYYY-MM') that have fully finished, within the selection."""
+    today = date.today()
+    this_month = f"{today.year}-{today.month:02d}"
+    if year == ALL_YEARS:
+        keys = [f"{y}-{m:02d}" for y in range(years[0], years[-1] + 1) for m in range(1, 13)]
+    else:
+        keys = [f"{year}-{m:02d}" for m in range(1, 13)]
+    return [k for k in keys if k < this_month]
+
+
+def _averages(cat_rows, ie_rows, completed: list[str]) -> dict[str, Any] | None:
+    """Per-month averages over completed months, from the first month with data."""
+    if not ie_rows:
+        return None
+    first = min(r["month"] for r in ie_rows)
+    completed = [m for m in completed if m >= first]
+    if not completed:
+        return None
+    done, n = set(completed), len(completed)
+    cats: dict[str, float] = {}
+    for r in cat_rows:
+        if r["month"] in done:
+            cats[r["label"]] = cats.get(r["label"], 0) + r["cents"]
+    income = sum(r["income"] for r in ie_rows if r["month"] in done)
+    expenses = sum(r["expenses"] for r in ie_rows if r["month"] in done)
+    return {
+        "cats": {label: v / n for label, v in cats.items()},
+        "income": income / n,
+        "expenses": expenses / n,
+        "net": (income - expenses) / n,
+    }
 
 # Per-row diverging scale (RGB): green = good, white = the row's average, red = bad.
 GREEN = (99, 190, 123)
@@ -187,7 +219,7 @@ def _summary_cards(summary: dict[str, Any], display: state.Display) -> None:
                 ui.label(text).classes(f"text-h5 {css}")
 
 
-def _month_table(pivot, ie_rows, year, periods, display, kind, level="category") -> None:
+def _month_table(pivot, ie_rows, year, periods, display, kind, level="category", averages=None) -> None:
     """Month x category totals, laid out as Total income, Total expenses, categories, Net.
 
     Every row is colour-scaled around its own monthly average. Category rows follow
@@ -210,7 +242,9 @@ def _month_table(pivot, ie_rows, year, periods, display, kind, level="category")
 
     columns = [{"name": "label", "label": "Category", "field": "label", "align": "left"}]
     columns += [{"name": m, "label": name, "field": m, "align": "right"} for m, name in zip(months, names)]
-    columns.append({"name": "total", "label": "Total", "field": "total", "align": "right"})
+    columns.append({"name": "total", "label": "Total", "field": "total", "align": "right",
+                    "headerStyle": "border-left: 3px solid #757575"})
+    columns.append({"name": "average", "label": "Avg / month", "field": "average", "align": "right"})
 
     reverse = kind == "income"
 
@@ -218,7 +252,9 @@ def _month_table(pivot, ie_rows, year, periods, display, kind, level="category")
     category_rows = []
     previous_group = None
     for label, by_month in pivot.items():
-        row = {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months}, "total": fmt(sum(by_month.values()))}
+        avg = averages["cats"].get(label, 0) if averages else 0
+        row = {"label": label, **{m: fmt(by_month.get(m, 0)) for m in months},
+               "total": fmt(sum(by_month.values())), "average": fmt(avg)}
         colours = _row_colours([by_month.get(m, 0) for m in scaled], reverse)
         row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
         group = label.split(" > ")[0]  # 'Food > Groceries' -> 'Food'
@@ -230,6 +266,10 @@ def _month_table(pivot, ie_rows, year, periods, display, kind, level="category")
     # Total column of the category rows: scaled vertically, across the categories.
     for row, colour in zip(category_rows, _row_colours([sum(by.values()) for by in pivot.values()], reverse)):
         row["_bg_total"] = colour
+    if averages:
+        avg_values = [averages["cats"].get(label, 0) for label in pivot]
+        for row, colour in zip(category_rows, _row_colours(avg_values, reverse)):
+            row["_bg_average"] = colour
 
     # Summary rows (always both kinds).
     by_month = {r["month"]: r for r in ie_rows}
@@ -237,20 +277,22 @@ def _month_table(pivot, ie_rows, year, periods, display, kind, level="category")
     expenses = {m: by_month.get(m, {}).get("expenses", 0) for m in months}
     net = {m: income[m] - expenses[m] for m in months}
 
-    def summary_row(label: str, values: dict[str, int], reverse_row: bool, **flags: bool) -> dict[str, Any]:
+    def summary_row(label: str, values: dict[str, int], reverse_row: bool, avg: float, **flags: bool) -> dict[str, Any]:
         row = {
             "label": label, **{m: fmt(values[m]) for m in months},
-            "total": fmt(sum(values.values())), "_is_total": True, **flags,
+            "total": fmt(sum(values.values())), "average": fmt(avg),
+            "_is_total": True, **flags,
         }
         colours = _row_colours([values[m] for m in scaled], reverse_row)
         row.update({f"_bg_{m}": colour for m, colour in zip(scaled, colours)})
         return row
 
+    a = averages or {"income": 0, "expenses": 0, "net": 0}
     rows = [
-        summary_row("Total income", income, True),                           # high is good
-        summary_row("Total expenses", expenses, False, _divider_below=True),  # high is bad
+        summary_row("Total income", income, True, a["income"]),
+        summary_row("Total expenses", expenses, False, a["expenses"], _divider_below=True),
         *category_rows,
-        summary_row("Net", net, True, _divider_above=True),                  # high is good
+        summary_row("Net", net, True, a["net"], _divider_above=True),
     ]
 
     table = ui.table(columns=columns, rows=rows, row_key="label", pagination=0)
@@ -267,6 +309,7 @@ def _month_table(pivot, ie_rows, year, periods, display, kind, level="category")
                   props.row._divider_below ? {borderBottom: '3px solid #757575'} : {},
                   props.row._divider_above ? {borderTop: '3px solid #757575'} : {},
                   props.row._group_start ? {borderTop: '2px solid #9e9e9e'} : {},
+                  props.col.name === 'total' ? {borderLeft: '3px solid #757575'} : {},
               ]">
             {{ props.value }}
         </q-td>
@@ -311,17 +354,25 @@ async def overview_page() -> None:
                     {"month": str(r["year"]), "income": r["income"], "expenses": r["expenses"]}
                     for r in db.yearly_totals(user_id, category_id)
                 ]
+                month_cat, month_ie = [], []
+                for y in years:
+                    month_cat += db.monthly_by_category(user_id, y, kind, level, category_id)
+                    month_ie += db.monthly_income_expense(user_id, y, category_id)
             else:
                 monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
                 ie_rows = db.monthly_income_expense(user_id, year, category_id)
+                month_cat, month_ie = monthly_rows, ie_rows
+            
             pivot = _pivot(monthly_rows)
+
+            averages = _averages(month_cat, month_ie, _completed_months(year, years))
 
             ui.label(f"{period_word} totals by category ({kind_word})").classes("text-h6")
             if not pivot:
                 components.info_message("Nothing to show for this selection.", "table_chart")
             else:
                 ui.label("Colours are relative to each row's own average.").classes("text-caption text-grey-7")
-                _month_table(_in_category_order(pivot, category_options), ie_rows, year, periods, display, kind, level)
+                _month_table(_in_category_order(pivot, category_options), ie_rows, year, periods, display, kind, level, averages)
 
             ui.label(f"{period_word} {kind_word} by {level}").classes("text-h6")
             if not pivot:
