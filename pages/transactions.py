@@ -36,6 +36,15 @@ TABLE_COLUMNS = [
     {"name": "actions", "label": "", "field": "actions", "align": "right"},
 ]
 
+UNIT_OPTIONS = {"day": "days", "week": "weeks", "month": "months"}
+
+
+def _schedule_text(rule: dict[str, Any]) -> str:
+    n, unit = rule["every_n"], rule["unit"]
+    if n == 1:
+        return {"day": "Daily", "week": "Weekly", "month": "Monthly"}[unit]
+    return f"Every {n} {UNIT_OPTIONS[unit]}"
+
 
 def _category_label(txn: dict[str, Any]) -> str:
     """'Food > Groceries', or just 'Food > Other' when no subcategory is used."""
@@ -127,6 +136,11 @@ async def transactions_page() -> None:
         return
     user_id = ctx.user["id"]
     shown: dict[int, dict[str, Any]] = {}  # transactions currently in the table, by id
+
+    try:
+        db.generate_pending(user_id)
+    except db.DataError as exc:
+        components.notify_error(exc)
 
     @ui.refreshable
     def transaction_table() -> None:
@@ -222,8 +236,151 @@ async def transactions_page() -> None:
         category_filter.value = None
         search.value = ""
 
+    # Recurring input gubbins
+    pending_inputs: dict[int, Any] = {}  # amount box per pending item, by id
+
+    def _pending_cents(item: dict[str, Any]) -> int:
+        """Signed cents from the item's amount box (typed positive, sign follows the type)."""
+        field = pending_inputs.get(item["id"])
+        if field is None or field.value is None:
+            raise db.DataError("Please enter an amount.")
+        cents = rates.amount_to_cents(field.value)
+        if cents <= 0:
+            raise db.DataError("The amount must be greater than zero.")
+        return cents if item["kind"] == "income" else -cents
+
+    @ui.refreshable
+    def pending_list() -> None:
+        pending_inputs.clear()
+        items = db.list_pending(user_id)
+        if not items:
+            return
+        with ui.card().classes("w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label(f"Recurring transactions awaiting review ({len(items)})") \
+                    .classes("text-subtitle1 text-bold")
+                ui.button("Accept all", icon="done_all", on_click=accept_all).props("flat")
+            ui.label(
+                f"Change an amount before accepting if it came in different "
+                f"(entered in {ctx.base_currency}, your base currency)."
+            ).classes("text-caption text-grey-7")
+            for p in items:
+                with ui.row().classes("w-full items-center gap-4"):
+                    ui.label(p["due_date"]).classes("w-24")
+                    ui.label(p["description"] or "(no description)").classes("grow")
+                    ui.label(_category_label(p)).classes("w-56")
+                    pending_inputs[p["id"]] = ui.number(
+                        value=abs(p["amount_cents"]) / 100, step=0.01, format="%.2f",
+                        label=f"{p['kind'].title()} ({ctx.base_currency})",
+                    ).classes("w-36")
+                    ui.button(icon="check", on_click=lambda _, item=p: review(item, True)) \
+                        .props("flat round dense color=positive").tooltip("Accept")
+                    ui.button(icon="close", on_click=lambda _, item=p: review(item, False)) \
+                        .props("flat round dense color=negative").tooltip("Reject")
+
+    def review(item: dict[str, Any], accept: bool) -> None:
+        try:
+            if accept:
+                db.accept_pending(user_id, item["id"], _pending_cents(item))
+            else:
+                db.reject_pending(user_id, item["id"])
+        except db.DataError as exc:
+            components.notify_error(exc)
+            return
+        pending_list.refresh()
+        if accept:
+            transaction_table.refresh()
+
+    def accept_all() -> None:
+        try:
+            for item in db.list_pending(user_id):
+                db.accept_pending(user_id, item["id"], _pending_cents(item))
+        except db.DataError as exc:
+            components.notify_error(exc)  # stops at the first problem; earlier ones are accepted
+        pending_list.refresh()
+        transaction_table.refresh()
+
+    @ui.refreshable
+    def recurring_list() -> None:
+        rules = db.list_recurring(user_id)
+        if not rules:
+            components.info_message("No recurring transactions yet.", "event_repeat")
+            return
+        for r in rules:
+            with ui.row().classes("w-full items-center gap-4"):
+                ui.label(r["description"] or _category_label(r)).classes(
+                    "grow" + ("" if r["active"] else " text-grey-6"))
+                ui.label(_schedule_text(r)).classes("w-36")
+                ui.label(f"Next: {r['next_date']}" if r["active"] else "Stopped").classes("w-36")
+                ui.label(ctx.display.money(r["amount_cents"])).classes(
+                    f"w-28 text-right {components.amount_class(r['amount_cents'])}")
+                ui.button(icon="edit", on_click=lambda _, rule=r: recurring_dialog(rule)) \
+                    .props("flat round dense").tooltip("Edit")
+                ui.button(icon="pause" if r["active"] else "play_arrow",
+                          on_click=lambda _, rule=r: toggle_rule(rule)) \
+                    .props("flat round dense").tooltip("Stop" if r["active"] else "Resume")
+                ui.button(icon="delete", on_click=lambda _, rule=r: delete_rule(rule)) \
+                    .props("flat round dense").tooltip("Delete")
+
+    def toggle_rule(rule: dict[str, Any]) -> None:
+        try:
+            db.set_recurring_active(user_id, rule["id"], not rule["active"])
+        except db.DataError as exc:
+            components.notify_error(exc)
+            return
+        recurring_list.refresh()
+
+    def delete_rule(rule: dict[str, Any]) -> None:
+        def delete() -> None:
+            db.delete_recurring(user_id, rule["id"])
+            recurring_list.refresh()
+            pending_list.refresh()
+
+        components.confirm_dialog(
+            "Delete recurring transaction",
+            "Delete this rule and its pending items? Transactions you already accepted are kept.",
+            "Delete", delete)
+
+    def recurring_dialog(rule: dict[str, Any] | None = None) -> None:
+        dialog = components.new_dialog()
+        with dialog, ui.card().classes("w-full max-w-5xl"):
+            ui.label("Edit recurring transaction" if rule else "New recurring transaction") \
+                .classes("text-h6")
+            rform = TransactionForm(user_id, ctx.base_currency, rule)
+            rform.date.props('label="' + ("Next date" if rule else "First date") + '"')
+            with ui.row().classes("items-center gap-4"):
+                ui.label("Repeat every")
+                every = ui.number(value=rule["every_n"] if rule else 1, min=1, step=1,
+                                  precision=0).classes("w-24")
+                unit = ui.select(UNIT_OPTIONS, value=rule["unit"] if rule else "month").classes("w-32")
+            ui.label("It appears in the pending list at the top once a date has passed.") \
+                .classes("text-caption text-grey-7")
+
+            def save() -> None:
+                try:
+                    day, cents, category_id, description = rform.read()
+                    n = int(every.value or 0)
+                    if rule:
+                        db.update_recurring(user_id, rule["id"], day, cents, category_id,
+                                            description, n, unit.value)
+                    else:
+                        db.add_recurring(user_id, day, cents, category_id, description, n, unit.value)
+                    db.generate_pending(user_id)
+                except db.DataError as exc:
+                    components.notify_error(exc)
+                    return
+                dialog.close()
+                recurring_list.refresh()
+                pending_list.refresh()
+
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button("Save", on_click=save)
+        dialog.open()
+
     with components.content():
         ui.label("Transactions").classes("text-h5")
+        pending_list()
 
         with ui.card().classes("w-full"):
             ui.label("Add a transaction").classes("text-subtitle1 text-bold")
@@ -235,6 +392,13 @@ async def transactions_page() -> None:
                     f"The table below shows {ctx.display.code}."
                 ).classes("text-caption text-grey-7")
             ui.button("Add transaction", icon="add", on_click=add_transaction)
+
+        with ui.expansion("Recurring transactions", icon="event_repeat", value=True).classes("w-full") \
+                .props("header-class=text-subtitle1"):
+            with ui.card().classes("w-full"):
+                ui.button("New recurring transaction", icon="add",
+                          on_click=lambda: recurring_dialog()).props("flat")
+                recurring_list()
 
         with ui.card().classes("w-full"):
             ui.label("Filters").classes("text-subtitle1 text-bold")

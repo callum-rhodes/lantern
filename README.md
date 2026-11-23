@@ -7,6 +7,7 @@ LANtern is a small, self-hosted personal finance tracker for your home network. 
 - Multiple named users, each with their own transactions and categories (no passwords). Each device is asked which user to view the first time it visits (skipped when there is only one user)
 - Two-level categories (category > subcategory), income and expense, in an order you choose
 - Everything is recorded in one base currency; view it in any currency Frankfurter publishes rates for
+- Recurring transactions (every N days, weeks or months) that wait in a review list, where you accept (optionally changing the amount) or reject each one
 - Overview page with summary cards, a colour-scaled month x category table, drill-down charts and an income vs expenses chart
 - Import transactions from a bank CSV, export your data as CSV, and back up or restore the whole database
 - Runs directly with Python or in a Docker container
@@ -18,7 +19,7 @@ LANtern is a small, self-hosted personal finance tracker for your home network. 
 | Page | Route | What it does |
 | --- | --- | --- |
 | Overview | `/` (also `/overview`) | Summary cards, month x category table, stacked monthly bars, income vs expenses, share pie |
-| Add Transactions | `/transactions` | Add, filter, edit and delete transactions |
+| Add Transactions | `/transactions` | Add, filter, edit and delete transactions; manage recurring transactions and review the ones that are due |
 | Edit Categories | `/categories` | Add, rename, reorder and delete categories and subcategories |
 | Export CSV | `/export` | Download transactions and/or month x category totals |
 | Import CSV | `/import` | Load a bank CSV with automatic category matching |
@@ -139,6 +140,17 @@ Each browser remembers its own selected user, display currency and dark-mode cho
 
 Type the amount as a positive number and use the Income/Expense toggle to set the sign. Amounts are entered in the base currency; the table shows the current display currency. If you don't choose a subcategory, the transaction goes into that category's **Other** subcategory. You can filter by date, category (including its subcategories) and description, and edit or delete rows from the table.
 
+#### Recurring transactions
+
+Open **Recurring transactions** on this page and choose **New recurring transaction**. A rule has a type, amount, category, optional description, a first date and a repeat interval of *every N days, weeks or months*. Monthly rules keep their day of the month, falling back to the last day in shorter months (31 Jan, 28 Feb, 31 Mar).
+
+- **Review list.** When you open the page, each occurrence whose date has passed appears in the **Recurring transactions awaiting review** card at the top. If you were away and several dates were missed, you get one item per missed date.
+- **Accept** adds the item as a real transaction on its due date. The amount box lets you change the value first (for example a variable utility bill); the change applies to that one occurrence only. **Accept all** accepts everything using the amounts currently shown.
+- **Reject** discards the item. Nothing is recorded.
+- **Edit** a rule to change its amount, category, description, interval or **next date**. Changes affect future occurrences only; items already waiting for review keep their original values.
+- **Stop** pauses a rule (it stays in the list, greyed out) and **Resume** restarts it. Dates that passed while it was stopped are skipped rather than added to the review list. **Delete** removes the rule and its waiting items; transactions you already accepted are kept.
+- Deleting a category moves its recurring rules and waiting items to the replacement category you choose, along with its transactions.
+
 ### Edit Categories
 
 - Add top-level categories (income or expense) and subcategories (two levels maximum; subcategories take their parent's type).
@@ -177,7 +189,8 @@ Amounts in the file are read as the base currency. The import is all-or-nothing:
 - **Choosing a user:** the active user is kept per browser in NiceGUI's `app.storage.user`, which is tied to a signed cookie. If the browser has no valid stored user and there are several users, `build_layout()` shows the user picker instead of the page. With exactly one user, that user is selected automatically. You can switch user at any time from the dropdown in the header, and the picker reappears if the stored user no longer exists (for example after restoring a backup without them).
 - **Currency display:** the selector in the header converts amounts at display time only. Stored data is never changed. Amounts you type into the form, import from a file or export in base currency are always in the base currency.
 - **Exchange rates** come from the free [Frankfurter](https://www.frankfurter.app) API and are cached in the database for 24 hours. If a refresh fails, the cached rates are used and a warning shows when they were last updated. After a failure it waits 10 minutes before trying again.
-- **Database upgrades:** `db.init_db()` creates missing tables and then runs small upgrades for databases from older versions (adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
+- **Database upgrades:** `db.init_db()` creates missing tables (including the recurring-transaction tables, so older databases and backups pick them up automatically) and then runs small upgrades for databases from older versions (adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
+- **Recurring transactions** are stored as rules (`recurring` table). Occurrence *i* falls on the start date plus *i* intervals, calculated from the start so month-end dates don't drift. When the Transactions page loads, `db.generate_pending` creates a row in `pending_transactions` for every occurrence dated before today (a unique index on rule and date prevents duplicates). Accepting a row inserts a normal transaction and removes the pending row.
 
 ## Project structure
 
@@ -189,12 +202,12 @@ lantern/
   state.py           active user (auto-selected only if there is one user) and display currency (per browser)
   components.py      page frame: header, navigation, user/currency pickers, first-run setup, first-visit user picker, dialogs
   pages/
-    overview.py      cards, charts, month x category table     (routes: / and /overview)
-    transactions.py  add/edit/delete form, filters and table   (route: /transactions)
-    categories.py    manage and reorder categories             (route: /categories)
-    export.py        CSV export                                (route: /export)
-    import_csv.py    CSV import with category matching         (route: /import)
-    backups.py       save, download, upload, restore backups   (route: /backups)
+    overview.py      cards, charts, month x category table                                    (routes: / and /overview)
+    transactions.py  add/edit/delete form, recurring rules, review list, filters and table    (route: /transactions)
+    categories.py    manage and reorder categories                                            (route: /categories)
+    export.py        CSV export                                                               (route: /export)
+    import_csv.py    CSV import with category matching                                        (route: /import)
+    backups.py       save, download, upload, restore backups                                  (route: /backups)
   requirements.txt
   Dockerfile
   docker-compose.yml
@@ -212,10 +225,8 @@ Conventions worth knowing when you change things:
 
 ## Extending the app later
 
-- **Yearly trends:** `db.yearly_totals` already returns income and expenses per year (optionally for one category). The Overview has a "Add category trend line" selector waiting for a chart that uses it.
-- **Multiple accounts:** add an `accounts` table (`id`, `user_id`, `name`) and an `account_id` column on `transactions`. Add an account dropdown to the form and an account filter to the transactions and overview pages. A transfer is two transactions, one on each account.
+- **Shared expenses:** add the ability to share an expense between users and track how much one user owes another based on who paid.
 - **Automatic backups:** call `db.create_backup()` from a `ui.timer` (or `app.on_startup`) and prune old files. Manual backups already exist on the Backups page.
 - **Budgets:** a `budgets(user_id, category_id, month, amount_cents)` table plus a progress bar per category on the overview page.
-- **Recurring transactions:** a `recurring` table checked at startup, creating any transactions that have come due.
 - **Schema changes:** add steps to `db._migrate()` (it checks for missing columns before altering tables). For bigger changes, consider a `PRAGMA user_version` check or a migration tool such as Alembic.
 - **Passwords:** if you ever need to protect it, NiceGUI's docs include a simple login example that keeps the signed-in user in `app.storage.user`; `state.py` is the place to plug it in.
