@@ -107,25 +107,158 @@ def content() -> Iterator[ui.column]:
 # Header
 # --------------------------------------------------------------------------
 
-def _choose_user(user_id: int) -> None:
-    """Remember the chosen user for this browser and rebuild the page."""
-    state.set_current_user(user_id)
-    ui.navigate.reload()
+def _password_fields(label: str = "Password") -> tuple[ui.input, ui.input]:
+    first = ui.input(label, password=True, password_toggle_button=True).classes("w-full")
+    second = ui.input("Repeat password", password=True, password_toggle_button=True).classes("w-full")
+    return first, second
 
 
-def _build_user_picker(users: list[dict[str, Any]]) -> None:
-    """Full-screen card asking which user this device should view."""
+def _passwords_match(first: ui.input, second: ui.input) -> bool:
+    if first.value != second.value:
+        ui.notify("The two passwords don't match.", type="warning")
+        return False
+    return True
+
+
+def _build_login(users: list[dict[str, Any]]) -> None:
+    """Login card. Users without a password are asked to choose one instead."""
+    by_id = {u["id"]: u for u in users}
+    stored = app.storage.user.get(state.USER_KEY)
     with ui.card().classes("absolute-center w-96 gap-3"):
         ui.label(f"Welcome to {APP_TITLE}").classes("text-h5")
-        ui.label("Who is using the tracker on this device?").classes("text-grey-7")
-        for user in users:
-            ui.button(user["name"], on_click=lambda _, uid=user["id"]: _choose_user(uid)) \
-                .classes("w-full")
+        choice = ui.select(
+            {u["id"]: u["name"] for u in users},
+            value=stored if stored in by_id else users[0]["id"], label="User",
+        ).classes("w-full")
+        form = ui.column().classes("w-full gap-3")
 
-def _switch_user(event: Any) -> None:
-    """Remember the chosen user and rebuild the page."""
-    state.set_current_user(event.value)
+        def show_form() -> None:
+            form.clear()
+            user = by_id[choice.value]
+            with form:
+                if user["has_password"]:
+                    password = ui.input("Password", password=True, password_toggle_button=True) \
+                        .classes("w-full").props("autofocus")
+
+                    def submit() -> None:
+                        try:
+                            state.try_login(user["id"], password.value or "")
+                        except db.DataError as exc:
+                            notify_error(exc)
+                            password.value = ""
+                            return
+                        ui.navigate.reload()
+
+                    password.on("keydown.enter", submit)
+                    ui.button("Log in", on_click=submit).classes("w-full")
+                else:
+                    ui.label("This user has no password yet. Choose one to continue.") \
+                        .classes("text-grey-7")
+                    first, second = _password_fields("New password")
+
+                    def submit() -> None:
+                        if not _passwords_match(first, second):
+                            return
+                        try:
+                            db.set_password(user["id"], first.value or "")
+                            state.log_in(user["id"])
+                        except db.DataError as exc:
+                            notify_error(exc)
+                            return
+                        ui.navigate.reload()
+
+                    second.on("keydown.enter", submit)
+                    ui.button("Set password and log in", on_click=submit).classes("w-full")
+
+        choice.on_value_change(show_form)
+        show_form()
+
+
+def _log_out(_: Any = None) -> None:
+    state.log_out()
     ui.navigate.reload()
+
+
+def _build_change_password_dialog(user_id: int) -> ui.dialog:
+    with ui.dialog() as dialog, ui.card().classes("w-80 gap-3"):
+        ui.label("Change password").classes("text-h6")
+        current = ui.input("Current password", password=True, password_toggle_button=True) \
+            .classes("w-full")
+        first, second = _password_fields("New password")
+
+        def save() -> None:
+            if not _passwords_match(first, second):
+                return
+            if not db.verify_password(user_id, current.value or ""):
+                ui.notify("Current password is wrong.", type="negative")
+                return
+            try:
+                db.set_password(user_id, first.value or "")
+            except db.DataError as exc:
+                notify_error(exc)
+                return
+            state.log_in(user_id)  # this device stays logged in; others are logged out
+            dialog.close()
+            ui.notify("Password changed. Other devices will need to log in again.", type="positive")
+
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            ui.button("Change", on_click=save)
+    return dialog
+
+
+def _build_add_user_dialog() -> ui.dialog:
+    with ui.dialog() as dialog, ui.card().classes("w-80 gap-3"):
+        ui.label("Add a user").classes("text-h6")
+        name = ui.input("Name").props("autofocus").classes("w-full")
+        first, second = _password_fields("Password")
+
+        def create() -> None:
+            if not _passwords_match(first, second):
+                return
+            try:
+                db.add_user(name.value, first.value or "")
+            except db.DataError as exc:
+                notify_error(exc)
+                return
+            dialog.close()
+            ui.notify(f"Created '{name.value.strip()}'. They can now log in.", type="positive")
+
+        second.on("keydown.enter", create)
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            ui.button("Create", on_click=create)
+    return dialog
+
+
+def _build_delete_user_dialog(user: dict[str, Any]) -> ui.dialog:
+    """Users can only delete their own account, after confirming their password."""
+    with ui.dialog() as dialog, ui.card().classes("w-96 gap-3"):
+        ui.label("Delete your account").classes("text-h6")
+        ui.label(
+            f"This permanently deletes '{user['name']}' and everything they have recorded: "
+            f"{db.transaction_count(user['id'])} transaction(s) and all of their categories. "
+            "This cannot be undone. Make a backup first if you are unsure."
+        ).classes("text-negative")
+        password = ui.input("Enter your password to confirm", password=True,
+                            password_toggle_button=True).classes("w-full")
+
+        def delete() -> None:
+            if not db.verify_password(user["id"], password.value or ""):
+                ui.notify("Wrong password.", type="negative")
+                return
+            try:
+                db.delete_user(user["id"])
+            except db.DataError as exc:
+                notify_error(exc)
+                return
+            state.log_out()
+            ui.navigate.reload()
+
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            ui.button("Delete permanently", on_click=delete).props("color=negative")
+    return dialog
 
 
 def _switch_currency(event: Any) -> None:
@@ -140,77 +273,12 @@ def _toggle_dark(_: Any = None) -> None:
     ui.navigate.reload()
 
 
-def _build_add_user_dialog() -> ui.dialog:
-    """A dialog for creating a new user (hidden until opened)."""
-    with ui.dialog() as dialog, ui.card().classes("w-80"):
-        ui.label("Add a user").classes("text-h6")
-        name = ui.input("Name").props("autofocus")
-
-        def create() -> None:
-            try:
-                user_id = db.add_user(name.value)
-            except db.DataError as exc:
-                notify_error(exc)
-                return
-            state.set_current_user(user_id)
-            ui.navigate.reload()
-
-        name.on("keydown.enter", create)
-        with ui.row().classes("w-full justify-end"):
-            ui.button("Cancel", on_click=dialog.close).props("flat")
-            ui.button("Create", on_click=create)
-    return dialog
-
-
-def _build_delete_user_dialog(current_user_id: int) -> ui.dialog:
-    """A warning dialog for permanently deleting a user and all their data."""
-    users = db.list_users()
-    with ui.dialog() as dialog, ui.card().classes("w-96 gap-3"):
-        ui.label("Delete a user").classes("text-h6")
-        choice = ui.select(
-            {u["id"]: u["name"] for u in users}, value=current_user_id, label="User to delete",
-        ).classes("w-full")
-        warning = ui.label().classes("text-negative")
-        last_user_note = ui.label(
-            "This is the only user, so you will be asked to create a new one afterwards."
-        ).classes("text-grey-7")
-        last_user_note.set_visibility(len(users) == 1)
-
-        def update_warning() -> None:
-            name = next(u["name"] for u in users if u["id"] == choice.value)
-            count = db.transaction_count(choice.value)
-            warning.text = (
-                f"This permanently deletes '{name}' and everything they have recorded: "
-                f"{count} transaction(s) and all of their categories. "
-                "This cannot be undone. Make a backup first if you are unsure."
-            )
-
-        choice.on_value_change(update_warning)
-        update_warning()
-
-        def delete() -> None:
-            uid = choice.value
-            try:
-                db.delete_user(uid)
-            except db.DataError as exc:
-                notify_error(exc)
-                return
-            remaining = db.list_users()
-            if uid == current_user_id and remaining:  # move this browser to someone else
-                state.set_current_user(remaining[0]["id"])
-            ui.navigate.reload()
-
-        with ui.row().classes("w-full justify-end"):
-            ui.button("Cancel", on_click=dialog.close).props("flat")
-            ui.button("Delete permanently", on_click=delete).props("color=negative")
-    return dialog
-
-
 def _build_header(ctx: PageContext, active: str) -> None:
     """Title, navigation, user picker, currency selector and dark-mode toggle."""
     ui.dark_mode(value=bool(app.storage.user.get("dark_mode")))
     add_user_dialog = _build_add_user_dialog()
-    delete_user_dialog = _build_delete_user_dialog(ctx.user["id"])
+    password_dialog = _build_change_password_dialog(ctx.user["id"])
+    delete_user_dialog = _build_delete_user_dialog(ctx.user)
     select_props = "dense options-dense outlined dark"
 
     with ui.header().classes("items-center justify-between gap-4"):
@@ -222,13 +290,15 @@ def _build_header(ctx: PageContext, active: str) -> None:
                     link.classes("font-bold underline")
 
         with ui.row().classes("items-center gap-2"):
-            users = {u["id"]: u["name"] for u in db.list_users()}
-            ui.select(users, value=ctx.user["id"], on_change=_switch_user) \
-                .props(select_props).classes("min-w-32").tooltip("Active user")
+            ui.label(ctx.user["name"]).classes("text-body1")
             ui.button(icon="person_add", on_click=add_user_dialog.open) \
                 .props("flat round dense color=white").tooltip("Add user")
+            ui.button(icon="key", on_click=password_dialog.open) \
+                .props("flat round dense color=white").tooltip("Change password")
             ui.button(icon="person_remove", on_click=delete_user_dialog.open) \
-                .props("flat round dense color=white").tooltip("Delete user")
+                .props("flat round dense color=white").tooltip("Delete my account")
+            ui.button(icon="logout", on_click=_log_out) \
+                .props("flat round dense color=white").tooltip("Log out")
             ui.select(ctx.status.currencies, value=ctx.display.code, on_change=_switch_currency) \
                 .props(select_props).classes("w-24").tooltip("Display currency")
             ui.button(icon="dark_mode", on_click=_toggle_dark) \
@@ -253,28 +323,33 @@ def _build_first_run_setup(need_currency: bool, need_user: bool) -> None:
                 list(rates.CURRENCY_SYMBOLS), value=db.DEFAULT_BASE_CURRENCY,
                 label="Base currency", with_input=True, new_value_mode="add-unique",
             ).classes("w-full")
-        name = None
+        name = first = second = None
         if need_user:
             ui.label("Create the first user. Each user has their own transactions and categories.") \
                 .classes("text-grey-7")
             name = ui.input("Name").classes("w-full").props("autofocus")
+            first, second = _password_fields("Password")  # new: password + repeat boxes
 
         def finish() -> None:
-            if name is not None and not (name.value or "").strip():
-                ui.notify("Please enter a name.", type="warning")
-                return
+            if name is not None:
+                if not (name.value or "").strip():
+                    ui.notify("Please enter a name.", type="warning")
+                    return
+                if not _passwords_match(first, second):   # new: stop if the two boxes differ
+                    return
             try:
                 if currency is not None:
                     db.set_base_currency(currency.value)
                 if name is not None:
-                    state.set_current_user(db.add_user(name.value))
+                    # new: create the user with their password, then log this device in
+                    state.log_in(db.add_user(name.value, first.value or ""))
             except db.DataError as exc:
                 notify_error(exc)
                 return
             ui.navigate.reload()
 
-        if name is not None:
-            name.on("keydown.enter", finish)
+        if second is not None:
+            second.on("keydown.enter", finish)            # Enter in the last box submits
         ui.button("Get started", on_click=finish).classes("w-full")
 
 
@@ -289,13 +364,13 @@ async def build_layout(active: str) -> PageContext | None:
     showing the setup card) when the base currency or the first user is missing.
     """
     users = db.list_users()
-    user = state.get_current_user()
     need_currency = not db.is_base_currency_set()
     if need_currency or not users:
         _build_first_run_setup(need_currency=need_currency, need_user=not users)
         return None
+    user = state.get_current_user()
     if user is None:
-        _build_user_picker(users)
+        _build_login(users)
         return None
 
     status = await rates.ensure_rates_async()

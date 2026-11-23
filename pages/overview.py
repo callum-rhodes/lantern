@@ -439,9 +439,10 @@ async def overview_page() -> None:
                     {"expense": "Expenses", "income": "Income"}, value="expense",
                     on_change=lambda: dashboard.refresh(),
                 )
-                trend_select = ui.select(
-                    category_options, label="Add category trend line", clearable=True, with_input=True,
-                    on_change=lambda: dashboard.refresh(),
-                ).classes("w-56")
+                # Existed in the old spending trend graph, got rid of but might be useful later.
+                # trend_select = ui.select(
+                #     category_options, label="Add category trend line", clearable=True, with_input=True,
+                #     on_change=lambda: dashboard.refresh(),
+                # ).classes("w-56")
 
         dashboard()

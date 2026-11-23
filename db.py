@@ -25,6 +25,9 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+import hashlib
+import hmac
+import secrets
 
 log = logging.getLogger(__name__)
 
@@ -60,8 +63,9 @@ DEFAULT_CATEGORIES: list[tuple[str, str, list[str]]] = [
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id   INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    password_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS categories (
@@ -177,6 +181,9 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Upgrade databases created by older versions of the app."""
+    user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "password_hash" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(categories)")}
     if "sort_order" not in columns:
         conn.execute("ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
@@ -266,22 +273,72 @@ def set_base_currency(code: str) -> None:
 # Users
 # --------------------------------------------------------------------------
 
-def list_users() -> list[dict[str, Any]]:
-    """All users, ordered by name."""
+MIN_PASSWORD_LENGTH = 4
+_SCRYPT = {"n": 2**14, "r": 8, "p": 1}
+_USER_COLS = "id, name, password_hash IS NOT NULL AS has_password"
+
+def hash_password(password: str) -> str:
+    """Salted scrypt hash, stored as 'scrypt$<salt>$<digest>' (hex)."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
+def _check_hash(password: str, stored: str) -> bool:
+    try:
+        scheme, salt_hex, digest_hex = stored.split("$")
+        digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), **_SCRYPT)
+    except ValueError:
+        return False
+    return scheme == "scrypt" and hmac.compare_digest(digest.hex(), digest_hex)
+
+
+def _validate_password(password: str | None) -> str:
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        raise DataError(f"Passwords need at least {MIN_PASSWORD_LENGTH} characters.")
+    return password  # type: ignore[return-value]
+
+
+def set_password(user_id: int, password: str) -> None:
+    """Set or replace a user's password (also used by the CLI reset)."""
+    hashed = hash_password(_validate_password(password))
     with connect() as conn:
-        return _all(conn.execute("SELECT id, name FROM users ORDER BY name COLLATE NOCASE"))
+        cur = conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hashed, user_id))
+        if cur.rowcount == 0:
+            raise DataError("User not found.")
+
+
+def verify_password(user_id: int, password: str) -> bool:
+    """True if the password matches. False for wrong passwords and users without one."""
+    with connect() as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+    return bool(row and row["password_hash"] and _check_hash(password or "", row["password_hash"]))
+
+
+def session_token(user_id: int) -> str | None:
+    """Changes whenever the password changes, so old logins stop working."""
+    with connect() as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not row or not row["password_hash"]:
+        return None
+    return hashlib.sha256(row["password_hash"].encode()).hexdigest()
+
+
+def list_users() -> list[dict[str, Any]]:
+    """All users, ordered by name (never includes the hash)."""
+    with connect() as conn:
+        return _all(conn.execute(f"SELECT {_USER_COLS} FROM users ORDER BY name COLLATE NOCASE"))
 
 
 def get_user(user_id: int) -> dict[str, Any] | None:
-    """One user by id."""
     with connect() as conn:
-        return _one(conn.execute("SELECT id, name FROM users WHERE id = ?", (user_id,)))
+        return _one(conn.execute(f"SELECT {_USER_COLS} FROM users WHERE id = ?", (user_id,)))
 
 
-def _create_user(conn: sqlite3.Connection, name: str) -> int:
+def _create_user(conn: sqlite3.Connection, name: str, password_hash: str | None = None) -> int:
     """Insert a user and seed the default categories (inside the caller's transaction)."""
     try:
-        cur = conn.execute("INSERT INTO users(name) VALUES (?)", (name,))
+        cur = conn.execute("INSERT INTO users(name, password_hash) VALUES (?, ?)", (name, password_hash))
     except sqlite3.IntegrityError as exc:
         raise DataError(f"A user called '{name}' already exists.") from exc
     user_id = int(cur.lastrowid)
@@ -292,13 +349,14 @@ def _create_user(conn: sqlite3.Connection, name: str) -> int:
     return user_id
 
 
-def add_user(name: str) -> int:
-    """Create a user with the default categories; return the new user id."""
+def add_user(name: str, password: str) -> int:
+    """Create a user with a password and the default categories; return the new user id."""
     name = (name or "").strip()
     if not name:
         raise DataError("Please enter a name.")
+    hashed = hash_password(_validate_password(password))
     with connect() as conn:
-        return _create_user(conn, name)
+        return _create_user(conn, name, hashed)
 
 
 def delete_user(user_id: int) -> None:

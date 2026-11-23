@@ -4,7 +4,7 @@
 
 LANtern is a small, self-hosted personal finance tracker for your home network. Python, [NiceGUI](https://nicegui.io) for the whole UI, SQLite for storage, Plotly for charts.
 
-- Multiple named users, each with their own transactions and categories (no passwords). Each device is asked which user to view the first time it visits (skipped when there is only one user)
+- Multiple named users, each with their own transactions and categories, protected by per-user passwords. A device stays logged in until the user logs out or their password changes
 - Two-level categories (category > subcategory), income and expense, in an order you choose
 - Everything is recorded in one base currency; view it in any currency Frankfurter publishes rates for
 - Recurring transactions (every N days, weeks or months) that wait in a review list, where you accept (optionally changing the amount) or reject each one
@@ -45,9 +45,11 @@ python main.py
 
 Then open <http://localhost:8080>.
 
-On first run the app asks for your **base currency** (default GBP) and the name of the first user. Pick the base currency carefully: every amount is stored in it, so changing it later would change what your recorded numbers mean.
+On first run the app asks for your **base currency** (default GBP) and for the name and password of the first user. Pick the base currency carefully: every amount is stored in it, so changing it later would change what your recorded numbers mean.
 
-When there is more than one user, each new device or browser shows a **"Who is using the tracker on this device?"** card on its first visit. Click your name and the choice is remembered on that device. With only one user this step is skipped.
+Every device shows a **login card** on its first visit: choose your name, enter your password, and the device stays logged in until you log out. Any logged-in user can add more users from the header. Passwords must be at least 4 characters.
+
+Users without a password (for example, those created before passwords were added, or the demo user) are asked to **choose one** the first time they pick their name on the login card. Whoever gets there first sets it.
 
 ### Try it with demo data
 
@@ -55,7 +57,7 @@ When there is more than one user, each new device or browser shows a **"Who is u
 python main.py --seed-demo
 ```
 
-This creates a user called **Demo** with about three years of random transactions so you can see the charts. It does nothing if Demo already has transactions.
+This creates a user called **Demo** with about three years of random transactions so you can see the charts. It does nothing if Demo already has transactions. The Demo user has no password; you will be asked to choose one the first time you log in as Demo.
 
 ## Run with Docker
 
@@ -73,6 +75,7 @@ Then open `http://<server-address>:8080`.
 - **Logs:** `docker compose logs -f finance-tracker`
 - **Stop:** `docker compose down` (add `-v` only if you want to delete the data volume too).
 - **Update after changing the code:** `docker compose up -d --build`
+- **Forgot a password:** `docker compose exec finance-tracker python main.py --reset-password NAME` (prompts for the new password; see "Resetting a password" below).
 
 Without Compose:
 
@@ -112,7 +115,7 @@ The server listens on all interfaces (`0.0.0.0`), so phones, tablets and other c
 2. Open that address on the other device.
 3. If it does not load, allow incoming connections to the port in the host machine's firewall (for example `sudo ufw allow 8080/tcp` on Ubuntu).
 
-**There is no login.** Anyone who can reach the port can see and change everything, so only run it on a network you trust and do not expose the port to the internet. On a server, a good setup is to bind the port to localhost (`"127.0.0.1:8080:8080"` in `docker-compose.yml`) and put a reverse proxy with authentication (or a VPN) in front.
+**Passwords protect your data, but the connection is not encrypted.** The app serves plain HTTP, so anyone who can watch the network traffic could read a password as it is sent. Only run it on a network you trust and do not expose the port to the internet. On a server, a good setup is to bind the port to localhost (`"127.0.0.1:8080:8080"` in `docker-compose.yml`) and put a reverse proxy with HTTPS (or a VPN) in front.
 
 ## Configuration
 
@@ -125,9 +128,28 @@ The server listens on all interfaces (`0.0.0.0`), so phones, tablets and other c
 | Storage secret | `FINANCE_STORAGE_SECRET=...` | generated once and kept in the database |
 | Time zone (Docker) | `TZ=Europe/London` | `Europe/London` in `docker-compose.yml` |
 
-Each browser remembers its own selected user, display currency and dark-mode choice. A device you have not used before (or whose cookies were cleared) is asked to pick a user again.
+Each browser remembers its logged-in user, display currency and dark-mode choice. A device you have not used before (or whose cookies were cleared) shows the login card. Changing `FINANCE_STORAGE_SECRET` logs every device out.
+
+### Resetting a password
+
+Passwords can be reset from the command line on the machine running the app (nobody can reset another user's password from the web interface):
+
+```bash
+python main.py --reset-password NAME
+docker compose exec finance-tracker python main.py --reset-password NAME
+```
+
+It asks for the new password twice, saves it and exits. That user is logged out on every device and must log in again with the new password.
 
 ## Using the app
+
+### Logging in and users
+
+- **Log in** from the card shown on each device. The login is remembered on that device until you use the **Log out** button in the header.
+- **Add user** (header) lets any logged-in user create a new user with a name and password. You stay logged in as yourself; the new user logs in on their own device.
+- **Change password** (key icon) asks for your current password. Your other devices are logged out and this one stays logged in.
+- **Delete my account** (header) permanently deletes your own user and all their data after confirming your password. Users cannot delete each other. Deleting the last user returns the app to the first-run setup.
+- After 5 wrong passwords a user is locked out for 5 minutes (this resets if the app restarts).
 
 ### Overview
 
@@ -181,26 +203,26 @@ Amounts in the file are read as the base currency. The import is all-or-nothing:
 
 - **Back up now** saves a complete copy of the database as `finance-YYYYMMDD-HHMMSS.db`, using SQLite's backup API, which is safe while the app is running.
 - **Download** or **Delete** any backup, or **Add a backup file (.db)** to upload one. Uploaded files are checked first and kept as `uploaded-<name>.db`.
-- **Restore** replaces the data of **all users** with the chosen backup. It first saves your current data as `pre-restore-<timestamp>.db`, so a restore can itself be undone. The signing secret is kept so open browsers stay on their chosen user and currency (a browser whose user is not in the restored backup is asked to pick again), and older backups are upgraded to the current schema.
+- **Restore** replaces the data of **all users** with the chosen backup. It first saves your current data as `pre-restore-<timestamp>.db`, so a restore can itself be undone. The signing secret is kept so open browsers stay valid. A device stays logged in only if that user exists in the restored backup with the same password; otherwise it shows the login card. Backups contain the password hashes (not the passwords), so keep them private. Older backups are upgraded to the current schema, and users in them without a password are asked to choose one.
 
 ## How it works
 
 - **Amounts** are stored as signed integer minor units (pence/cents) in the base currency: income is positive, spending is negative. A category's type must match the sign of its transactions.
-- **Choosing a user:** the active user is kept per browser in NiceGUI's `app.storage.user`, which is tied to a signed cookie. If the browser has no valid stored user and there are several users, `build_layout()` shows the user picker instead of the page. With exactly one user, that user is selected automatically. You can switch user at any time from the dropdown in the header, and the picker reappears if the stored user no longer exists (for example after restoring a backup without them).
+- **Logging in:** each user has a salted scrypt password hash in the `users` table (standard library `hashlib`, no extra dependency). After a successful login, the browser's `app.storage.user` holds the user id plus a token derived from that user's password hash. `state.get_current_user()` accepts the device only if the token still matches, so changing or resetting a password logs the user out everywhere. Failed logins are rate-limited per user in `state.try_login`. If the browser is not logged in, `build_layout()` shows the login card instead of the page.
 - **Currency display:** the selector in the header converts amounts at display time only. Stored data is never changed. Amounts you type into the form, import from a file or export in base currency are always in the base currency.
 - **Exchange rates** come from the free [Frankfurter](https://www.frankfurter.app) API and are cached in the database for 24 hours. If a refresh fails, the cached rates are used and a warning shows when they were last updated. After a failure it waits 10 minutes before trying again.
-- **Database upgrades:** `db.init_db()` creates missing tables (including the recurring-transaction tables, so older databases and backups pick them up automatically) and then runs small upgrades for databases from older versions (adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
+- **Database upgrades:** `db.init_db()` creates missing tables (including the recurring-transaction tables, so older databases and backups pick them up automatically) and then runs small upgrades for databases from older versions (adding the `password_hash` column to `users`, adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
 - **Recurring transactions** are stored as rules (`recurring` table). Occurrence *i* falls on the start date plus *i* intervals, calculated from the start so month-end dates don't drift. When the Transactions page loads, `db.generate_pending` creates a row in `pending_transactions` for every occurrence dated before today (a unique index on rule and date prevents duplicates). Accepting a row inserts a normal transaction and removes the pending row.
 
 ## Project structure
 
 ```
 lantern/
-  main.py            entry point: options, route registration, ui.run()
-  db.py              connection handling, schema, ALL SQL queries, backups, demo data
+  main.py            entry point: options (including --reset-password), route registration, ui.run()
+  db.py              connection handling, schema, ALL SQL queries, password hashing, backups, demo data
   rates.py           exchange-rate fetching/caching, money parsing and formatting
-  state.py           active user (auto-selected only if there is one user) and display currency (per browser)
-  components.py      page frame: header, navigation, user/currency pickers, first-run setup, first-visit user picker, dialogs
+  state.py           logged-in user (login, logout, rate limiting) and display currency (per browser)
+  components.py      page frame: header, navigation, login card, user/password dialogs, first-run setup, currency picker
   pages/
     overview.py      cards, charts, month x category table                                    (routes: / and /overview)
     transactions.py  add/edit/delete form, recurring rules, review list, filters and table    (route: /transactions)
@@ -229,4 +251,5 @@ Conventions worth knowing when you change things:
 - **Automatic backups:** call `db.create_backup()` from a `ui.timer` (or `app.on_startup`) and prune old files. Manual backups already exist on the Backups page.
 - **Budgets:** a `budgets(user_id, category_id, month, amount_cents)` table plus a progress bar per category on the overview page.
 - **Schema changes:** add steps to `db._migrate()` (it checks for missing columns before altering tables). For bigger changes, consider a `PRAGMA user_version` check or a migration tool such as Alembic.
-- **Passwords:** if you ever need to protect it, NiceGUI's docs include a simple login example that keeps the signed-in user in `app.storage.user`; `state.py` is the place to plug it in.
+- **HTTPS:** terminate TLS in a reverse proxy (Caddy and nginx both work) so passwords are not sent in the clear.
+- **Admin role:** add an `is_admin` flag on `users` if you want only some users to create users or reset passwords from the web.

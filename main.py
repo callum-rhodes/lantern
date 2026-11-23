@@ -60,6 +60,24 @@ def get_storage_secret() -> str:
     return new_secret
 
 
+def reset_password(name: str) -> None:
+    """Command-line password reset (also logs that user out on every device)."""
+    import getpass
+
+    users = db.list_users()
+    user = next((u for u in users if u["name"].casefold() == name.strip().casefold()), None)
+    if user is None:
+        raise SystemExit(f"No user called '{name}'. Users: {', '.join(u['name'] for u in users)}")
+    password = getpass.getpass("New password: ")
+    if password != getpass.getpass("Repeat password: "):
+        raise SystemExit("The passwords didn't match.")
+    try:
+        db.set_password(user["id"], password)
+    except db.DataError as exc:
+        raise SystemExit(str(exc))
+    print(f"Password updated for '{user['name']}'. They will need to log in again on every device.")
+
+
 def lan_address() -> str | None:
     """Best-effort guess of this machine's address on the local network."""
     try:
@@ -81,6 +99,8 @@ def parse_args() -> argparse.Namespace:
         "--seed-demo", action="store_true",
         help="create a 'Demo' user with a few years of random transactions",
     )
+    parser.add_argument("--reset-password", metavar="NAME",
+                    help="set a new password for a user, then exit")
     return parser.parse_args()
 
 
@@ -90,6 +110,9 @@ def main() -> None:
     args = parse_args()
 
     db.init_db()
+    if args.reset_password:
+        reset_password(args.reset_password)
+        return
     if args.seed_demo:
         if not db.is_base_currency_set():
             db.set_base_currency(db.DEFAULT_BASE_CURRENCY)
