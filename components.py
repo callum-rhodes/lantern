@@ -21,16 +21,17 @@ import rates
 import state
 
 APP_TITLE = "Lantern"
-NAV_LINKS: list[tuple[str, str]] = [
+NAV_LINKS_MAIN: list[tuple[str, str]] = [
     ("Overview", "/"),
     ("Add Transactions", "/transactions"),
-    ("Shared Transactions", "/shared"),
+    ("Shared Balances", "/shared"),
+]
+NAV_LINKS_OTHER: list[tuple[str, str]] = [
     ("Edit Categories", "/categories"),
     ("Export CSV", "/export"),
     ("Import CSV", "/import"),
     ("Backups", "/backups"),
 ]
-
 
 @dataclass(frozen=True)
 class PageContext:
@@ -284,11 +285,19 @@ def _build_header(ctx: PageContext, active: str) -> None:
 
     with ui.header().classes("items-center justify-between gap-4"):
         with ui.row().classes("items-center gap-6"):
-            ui.label(APP_TITLE).classes("text-h6")
-            for label, path in NAV_LINKS:
-                link = ui.link(label, path).classes("text-white no-underline")
-                if label == active:
-                    link.classes("font-bold underline")
+            ui.label(APP_TITLE).classes("text-h4 text-bold")
+            with ui.button_group():
+                for label, path in NAV_LINKS_MAIN:
+                    # link = ui.link(label, path).classes("text-white no-underline")
+                    # if label == active:
+                    #     link.classes("font-bold underline")
+                    ui.button(label, on_click=lambda p=path: ui.navigate.to(p)).classes(
+                        "text-white no-underline" + (" font-bold underline" if label == active else "")
+                    )
+
+                with ui.dropdown_button('Other functions', icon='settings', split=False).classes("text-white"):
+                    for label, path in NAV_LINKS_OTHER:
+                        ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes("text-white no-underline")
 
         with ui.row().classes("items-center gap-2"):
             ui.label(ctx.user["name"]).classes("text-body1")

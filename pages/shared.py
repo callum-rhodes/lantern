@@ -57,7 +57,7 @@ ACTIONS_SLOT = """
 @ui.page("/shared")
 async def shared_page() -> None:
     """Render the Shared Transactions page."""
-    ctx = await components.build_layout("Shared Transactions")
+    ctx = await components.build_layout("Shared Balances")
     if ctx is None:
         return
     user_id = ctx.user["id"]
