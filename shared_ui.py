@@ -17,7 +17,7 @@ from typing import Any
 from nicegui import ui
 
 import components
-import db
+from db import DataError, users, shared_transactions, categories
 import rates
 import splits
 
@@ -139,7 +139,7 @@ class SplitModel:
     def _cell_cents(value: float | None) -> int:
         try:
             return 0 if value is None else rates.amount_to_cents(value)
-        except db.DataError:
+        except DataError:
             return -1
 
     def cents(self, col: str) -> list[int] | None:
@@ -184,7 +184,7 @@ class SplitModel:
         return None
 
     def participants(self) -> list[dict[str, int]]:
-        """Rows for ``db.create_shared_transaction`` (only valid when ``problem()`` is None)."""
+        """Rows for ``db.shared_transactions.create_shared_transaction`` (only valid when ``problem()`` is None)."""
         paid, owed = self.cents(PAID), self.cents(OWED)
         assert paid is not None and owed is not None
         return [{"user_id": u, "paid_cents": p, "owed_cents": o}
@@ -202,7 +202,7 @@ class _SplitDialog:
         self.me = ctx.user["id"]
         self.currency = ctx.base_currency
         self.symbol = rates.CURRENCY_SYMBOLS.get(self.currency, self.currency)
-        self.names = {u["id"]: u["name"] for u in db.list_users()}
+        self.names = {u["id"]: u["name"] for u in users.list_users()}
         total = prefill.get("total")
         self.model = SplitModel(self.me, rates.amount_to_cents(total) if total else 0)
         self.remaining_labels: dict[str, ui.label] = {}
@@ -342,7 +342,7 @@ class _SplitDialog:
     def _total_changed(self, event: Any) -> None:
         try:
             cents = rates.amount_to_cents(event.value) if event.value is not None else 0
-        except db.DataError:
+        except DataError:
             cents = 0
         self.model.set_total(cents)
         self.rows.refresh()
@@ -373,11 +373,11 @@ class _SplitDialog:
             ui.notify(problem, type="warning")
             return
         try:
-            db.create_shared_transaction(
+            shared_transactions.create_shared_transaction(
                 self.me, self.prefill["date"], self.prefill.get("description", ""),
                 self.model.total_cents, self.prefill.get("category_id"), self.model.participants(),
             )
-        except db.DataError as exc:
+        except DataError as exc:
             components.notify_error(exc)
             return
         self.dialog.close()
@@ -409,10 +409,10 @@ def pending_shared_card(ctx: components.PageContext, on_change: Callable[[], Non
     Call it inside a ``ui.refreshable``; ``on_change`` runs after each accept or reject.
     """
     user_id = ctx.user["id"]
-    items = db.list_shared_pending(user_id)
+    items = shared_transactions.list_shared_pending(user_id)
     if not items:
         return
-    options = db.category_options(user_id, kind="expense")
+    options = categories.category_options(user_id, kind="expense")
     selects: dict[int, ui.select] = {}
 
     def accept(item: dict[str, Any]) -> None:
@@ -421,15 +421,15 @@ def pending_shared_card(ctx: components.PageContext, on_change: Callable[[], Non
             ui.notify("Choose a category first.", type="warning")
             return
         try:
-            db.accept_shared(user_id, item["id"], category_id)
-        except db.DataError as exc:
+            shared_transactions.accept_shared(user_id, item["id"], category_id)
+        except DataError as exc:
             components.notify_error(exc)
             return
         on_change()
 
     def reject(item: dict[str, Any]) -> None:
         def do_reject() -> None:
-            db.reject_shared(user_id, item["id"])
+            shared_transactions.reject_shared(user_id, item["id"])
             ui.notify("Rejected. The split has been cancelled for everyone.", type="positive")
             on_change()
 

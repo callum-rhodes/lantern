@@ -23,7 +23,7 @@ from typing import Any
 from nicegui import ui
 
 import components
-import db
+from db import DataError, transactions, categories
 import rates
 
 DATE_FORMATS = {
@@ -66,7 +66,7 @@ def _norm(text: str) -> str:
 
 
 def parse_csv(raw: bytes) -> tuple[list[str], list[dict[str, str]]]:
-    """Decode and read a CSV file into (headers, rows). Raises ``db.DataError`` if unusable."""
+    """Decode and read a CSV file into (headers, rows). Raises ``DataError`` if unusable."""
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -78,7 +78,7 @@ def parse_csv(raw: bytes) -> tuple[list[str], list[dict[str, str]]]:
     reader = csv.reader(io.StringIO(text), dialect)
     table = [row for row in reader if any(cell.strip() for cell in row)]
     if len(table) < 2:
-        raise db.DataError("The file needs a header row and at least one data row.")
+        raise DataError("The file needs a header row and at least one data row.")
     headers = [h.strip() or f"Column {i + 1}" for i, h in enumerate(table[0])]
     rows = [dict(zip(headers, (cell.strip() for cell in row))) for row in table[1:]]
     return headers, rows
@@ -121,7 +121,7 @@ def _parse_amount(text: str) -> int:
     if negative:
         s = "-" + s.lstrip("-")
     if s in ("", "-", "+"):
-        raise db.DataError("no amount")
+        raise DataError("no amount")
     return rates.amount_to_cents(s)
 
 
@@ -133,12 +133,12 @@ class Matcher:
     """Finds a category for a row from earlier transactions and category names."""
 
     def __init__(self, user_id: int) -> None:
-        self.by_description = db.description_category_map(user_id)  # {(desc, kind): id}
+        self.by_description = transactions.description_category_map(user_id)  # {(desc, kind): id}
         self.by_label: dict[tuple[str, str], int] = {}
-        for cat in db.list_categories(user_id):  # top-level first, so plain names favour them
+        for cat in categories.list_categories(user_id):  # top-level first, so plain names favour them
             label = f"{cat['parent_name']} > {cat['name']}" if cat["parent_name"] else cat["name"]
             self.by_label[(_norm(label), cat["kind"])] = cat["id"]
-            if not db.is_other(cat):
+            if not categories.is_other(cat):
                 self.by_label.setdefault((_norm(cat["name"]), cat["kind"]), cat["id"])
 
     def find(self, description: str, kind: str, csv_category: str = "") -> int | None:
@@ -192,7 +192,7 @@ def prepare_rows(
             continue
         try:
             cents = _parse_amount(raw.get(amount_col, ""))
-        except db.DataError:
+        except DataError:
             problems.append(f"Line {line}: unreadable amount '{raw.get(amount_col, '')}'")
             continue
         if invert:
@@ -238,15 +238,15 @@ async def import_page() -> None:
 
             auto = [r for r in rows if r.category_id is not None]
             manual = [r for r in rows if r.category_id is None]
-            existing = db.existing_keys(user_id, min(r.date for r in rows), max(r.date for r in rows))
-            others = db.other_subcategory_map(user_id)
+            existing = transactions.existing_keys(user_id, min(r.date for r in rows), max(r.date for r in rows))
+            others = transactions.other_subcategory_map(user_id)
             ui.label(
                 f"{len(rows)} row(s) read: {len(auto)} matched automatically, "
                 f"{len(manual)} need a category."
             ).classes("text-h6")
 
             if manual:
-                options = {kind: db.category_options(user_id, kind=kind) for kind in db.KINDS}
+                options = {kind: categories.category_options(user_id, kind=kind) for kind in categories.KINDS}
 
                 def propagate(source: ImportRow, value: Any) -> None:
                     """Reuse a choice for other empty rows with the same description."""
@@ -278,7 +278,7 @@ async def import_page() -> None:
                             row.skip = ui.checkbox("Skip")
 
             if auto:
-                labels = db.category_options(user_id)
+                labels = categories.category_options(user_id)
                 ui.label("Matched automatically").classes("text-subtitle1 text-bold")
                 table = ui.table(
                     columns=TABLE_COLUMNS, row_key="line", pagination=15,
@@ -316,11 +316,11 @@ async def import_page() -> None:
                     return
                 chosen.sort(key=lambda r: r.line)
                 try:
-                    result = db.import_transactions(
+                    result = transactions.import_transactions(
                         user_id, [(r.date, r.cents, r.category_id, r.description) for r in chosen],
                         skip_duplicates=skip_dupes.value,
                     )
-                except db.DataError as exc:
+                except DataError as exc:
                     components.notify_error(exc)
                     return
                 text = f"Imported {result['added']} transaction(s)"
@@ -378,7 +378,7 @@ async def import_page() -> None:
         try:
             headers, csv_rows = parse_csv(await event.file.read())
             name = event.file.name
-        except db.DataError as exc:
+        except DataError as exc:
             components.notify_error(exc)
             return
         finally:

@@ -13,7 +13,7 @@ from datetime import date
 from nicegui import ui
 
 import components
-import db
+from db import DataError, transactions, reports, categories
 import rates
 
 
@@ -24,7 +24,7 @@ def _money(cents: int, rate: float) -> str:
 
 def transactions_csv(user_id: int, rate: float) -> str:
     """Every transaction, oldest first, one row each."""
-    txns = sorted(db.list_transactions(user_id), key=lambda t: (t["date"], t["id"]))
+    txns = sorted(transactions.list_transactions(user_id), key=lambda t: (t["date"], t["id"]))
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(["Date", "Description", "Category", "Subcategory", "Type", "Amount"])
@@ -42,7 +42,7 @@ def totals_csv(user_id: int, level: str, rate: float) -> str:
     One row per category; one column per month from the first to the last year
     with data, then a Total column. Expenses are positive, as on the Overview page.
     """
-    years = db.available_years(user_id)
+    years = reports.available_years(user_id)
     months = [f"{y}-{m:02d}" for y in range(years[0], years[-1] + 1) for m in range(1, 13)] if years else []
     out = io.StringIO()
     writer = csv.writer(out)
@@ -50,12 +50,12 @@ def totals_csv(user_id: int, level: str, rate: float) -> str:
                     + [f"{calendar.month_abbr[int(m[5:])]} {m[:4]}" for m in months] + ["Total"])
 
     # Same order as the Categories page (subcategories grouped under their parent).
-    order = {label: i for i, label in enumerate(db.category_options(user_id).values())}
+    order = {label: i for i, label in enumerate(categories.category_options(user_id).values())}
 
     for kind in ("expense", "income"):
         pivot: dict[str, dict[str, int]] = {}
         for year in years:
-            for row in db.monthly_by_category(user_id, year, kind, level):
+            for row in reports.monthly_by_category(user_id, year, kind, level):
                 pivot.setdefault(row["label"], {})[row["month"]] = row["cents"]
         for label in sorted(pivot, key=lambda l: (order.get(l, len(order)), l)):
             by_month = pivot[label]
@@ -86,7 +86,7 @@ async def export_page() -> None:
         if not (want_transactions.value or want_totals.value):
             ui.notify("Tick at least one export.", type="warning")
             return
-        if db.transaction_count(user_id) == 0:
+        if transactions.transaction_count(user_id) == 0:
             ui.notify("There are no transactions to export yet.", type="warning")
             return
         rate = 1.0 if amounts.value == "base" else ctx.display.rate
@@ -98,7 +98,7 @@ async def export_page() -> None:
             if want_totals.value:
                 _download(totals_csv(user_id, level.value, rate),
                           f"month_category_totals_{name}_{stamp}.csv")
-        except db.DataError as exc:
+        except DataError as exc:
             components.notify_error(exc)
 
     with components.content():

@@ -20,7 +20,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import httpx
 
-import db
+from db import DataError, rate_cache, settings
 
 log = logging.getLogger(__name__)
 
@@ -109,9 +109,9 @@ def ensure_rates(base: str | None = None, force: bool = False) -> RateStatus:
     reported through ``RateStatus.warning``.
     """
     global _last_failed_attempt
-    base = (base or db.get_base_currency()).upper()
+    base = (base or settings.get_base_currency()).upper()
     with _lock:
-        cached, fetched_at = db.load_rates(base)
+        cached, fetched_at = rate_cache.load_rates(base)
         warning: str | None = None
 
         recently_failed = (
@@ -122,8 +122,8 @@ def ensure_rates(base: str | None = None, force: bool = False) -> RateStatus:
             try:
                 fresh = _fetch_remote(base)
                 try:
-                    fetched_at = db.save_rates(base, fresh)
-                except db.DataError:
+                    fetched_at = rate_cache.save_rates(base, fresh)
+                except DataError:
                     log.warning("Could not cache exchange rates", exc_info=True)
                     fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 cached = fresh
@@ -171,9 +171,9 @@ def amount_to_cents(value: str | int | float | Decimal) -> int:
     try:
         amount = Decimal(str(value).replace(",", "").strip())
     except InvalidOperation as exc:
-        raise db.DataError("Please enter the amount as a number, e.g. 12.50.") from exc
+        raise DataError("Please enter the amount as a number, e.g. 12.50.") from exc
     if not amount.is_finite():
-        raise db.DataError("Please enter the amount as a number, e.g. 12.50.")
+        raise DataError("Please enter the amount as a number, e.g. 12.50.")
     return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 

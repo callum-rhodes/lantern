@@ -3,7 +3,7 @@
 * Balances card: one line per user you have shared with ("B owes you", "You owe B" or
   "All settled with B"), with a "Mark as settled" button and a confirmation dialog.
 * Activity table (newest first): shared transactions and settlement entries. Shared rows
-  open a details dialog and can be deleted where the rules allow (db.list_shared says which);
+  open a details dialog and can be deleted where the rules allow (db/shared_transactions.list_shared says which);
   settlement entries can be deleted by either party.
 
 Accepting or rejecting a share that is waiting for you happens on the Transactions page.
@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 from nicegui import app, ui
 
 import components
-import db
+from db import DataError, shared_transactions
 import rates
 
 TABLE_COLUMNS = [
@@ -88,8 +88,8 @@ async def shared_page() -> None:
 
             def confirm() -> None:
                 try:
-                    db.settle_balance(user_id, balance["user_id"], cents)
-                except db.DataError as exc:
+                    shared_transactions.settle_balance(user_id, balance["user_id"], cents)
+                except DataError as exc:
                     components.notify_error(exc)  # e.g. "balance changed": show the new amount
                     dialog.close()
                     refresh_all()
@@ -105,7 +105,7 @@ async def shared_page() -> None:
 
     @ui.refreshable
     def balances_card() -> None:
-        balances = db.shared_balances(user_id)
+        balances = shared_transactions.shared_balances(user_id)
         with ui.card().classes("w-full"):
             ui.label("Balances").classes("text-h6")
             if not balances:
@@ -130,7 +130,7 @@ async def shared_page() -> None:
 
     @ui.refreshable
     def balance_chart() -> None:
-        balances = db.shared_balances(user_id)
+        balances = shared_transactions.shared_balances(user_id)
         if not balances:
             return
         names = [b["name"] for b in balances]
@@ -245,7 +245,7 @@ async def shared_page() -> None:
             return
         if row_key.startswith("p"):
             def do_delete() -> None:
-                db.delete_settlement(user_id, item["id"])
+                shared_transactions.delete_settlement(user_id, item["id"])
                 ui.notify("Settlement deleted. The previous balance is back.", type="positive")
                 refresh_all()
 
@@ -257,7 +257,7 @@ async def shared_page() -> None:
             return
 
         def do_delete_shared() -> None:
-            db.delete_shared(user_id, item["id"])
+            shared_transactions.delete_shared(user_id, item["id"])
             ui.notify("Deleted.", type="positive")
             refresh_all()
 
@@ -270,8 +270,8 @@ async def shared_page() -> None:
 
     @ui.refreshable
     def activity() -> None:
-        shared = db.list_shared(user_id)
-        settlements = db.list_settlements(user_id)
+        shared = shared_transactions.list_shared(user_id)
+        settlements = shared_transactions.list_settlements(user_id)
         items.clear()
         items.update({f"s{s['id']}": s for s in shared})
         items.update({f"p{p['id']}": p for p in settlements})

@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from nicegui import app, ui
 
 import components
-import db
+from db import reports, categories
 import state
 
 INCOME_COLOR = "#21ba45"
@@ -51,7 +51,7 @@ def _in_category_order(
 ) -> dict[str, dict[str, int]]:
     """Reorder pivot rows to match the category order set on the Categories page.
 
-    ``category_options`` (from ``db.category_options``) lists each category followed
+    ``category_options`` (from ``db/categories.category_options``) lists each category followed
     by its subcategories, e.g. 'Food', 'Food > Groceries', 'Food > Restaurants', so
     its order is the user's own order and keeps subcategories grouped under their parent.
     Labels not found there (should not happen) go last.
@@ -346,7 +346,7 @@ async def overview_page() -> None:
     if ctx is None:
         return
     user_id, display = ctx.user["id"], ctx.display
-    years = db.available_years(user_id)
+    years = reports.available_years(user_id)
 
     with components.content():
         ui.label("Overview").classes("text-h5")
@@ -354,7 +354,7 @@ async def overview_page() -> None:
             components.info_message("No data yet. Add some transactions to see charts here.", "insights")
             return
 
-        category_options = db.category_options(user_id)
+        category_options = categories.category_options(user_id)
         label_to_id = {label: cid for cid, label in category_options.items()}
         current_year = date.today().year
 
@@ -368,21 +368,21 @@ async def overview_page() -> None:
             year_text = "all years" if all_years else str(year)
             periods = _periods(year, years)
 
-            _summary_cards(db.period_summary(user_id, None if all_years else year, category_id), display)
+            _summary_cards(reports.period_summary(user_id, None if all_years else year, category_id), display)
 
             if all_years:
-                monthly_rows = db.yearly_by_category(user_id, kind, level, category_id)
+                monthly_rows = reports.yearly_by_category(user_id, kind, level, category_id)
                 ie_rows = [
                     {"month": str(r["year"]), "income": r["income"], "expenses": r["expenses"]}
-                    for r in db.yearly_totals(user_id, category_id)
+                    for r in reports.yearly_totals(user_id, category_id)
                 ]
                 month_cat, month_ie = [], []
                 for y in years:
-                    month_cat += db.monthly_by_category(user_id, y, kind, level, category_id)
-                    month_ie += db.monthly_income_expense(user_id, y, category_id)
+                    month_cat += reports.monthly_by_category(user_id, y, kind, level, category_id)
+                    month_ie += reports.monthly_income_expense(user_id, y, category_id)
             else:
-                monthly_rows = db.monthly_by_category(user_id, year, kind, level, category_id)
-                ie_rows = db.monthly_income_expense(user_id, year, category_id)
+                monthly_rows = reports.monthly_by_category(user_id, year, kind, level, category_id)
+                ie_rows = reports.monthly_income_expense(user_id, year, category_id)
                 month_cat, month_ie = monthly_rows, ie_rows
             
             pivot = _pivot(monthly_rows)

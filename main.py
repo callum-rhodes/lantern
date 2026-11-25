@@ -26,7 +26,7 @@ os.environ.setdefault("NICEGUI_STORAGE_PATH", str(Path(__file__).resolve().paren
 
 from nicegui import ui  # noqa: E402
 
-import db  # noqa: E402
+from db import DataError, settings, users, schema, demo, core
 from components import APP_TITLE  # noqa: E402
 
 # Importing the page modules registers their routes (they use @ui.page).
@@ -53,11 +53,11 @@ def get_storage_secret() -> str:
     env_secret = os.environ.get("FINANCE_STORAGE_SECRET")
     if env_secret:
         return env_secret
-    stored = db.get_setting("storage_secret")
+    stored = settings.get_setting("storage_secret")
     if stored:
         return stored
     new_secret = secrets.token_hex(32)
-    db.set_setting("storage_secret", new_secret)
+    settings.set_setting("storage_secret", new_secret)
     return new_secret
 
 
@@ -65,16 +65,16 @@ def reset_password(name: str) -> None:
     """Command-line password reset (also logs that user out on every device)."""
     import getpass
 
-    users = db.list_users()
-    user = next((u for u in users if u["name"].casefold() == name.strip().casefold()), None)
+    user_list = users.list_users()
+    user = next((u for u in user_list if u["name"].casefold() == name.strip().casefold()), None)
     if user is None:
-        raise SystemExit(f"No user called '{name}'. Users: {', '.join(u['name'] for u in users)}")
+        raise SystemExit(f"No user called '{name}'. Users: {', '.join(u['name'] for u in user_list)}")
     password = getpass.getpass("New password: ")
     if password != getpass.getpass("Repeat password: "):
         raise SystemExit("The passwords didn't match.")
     try:
-        db.set_password(user["id"], password)
-    except db.DataError as exc:
+        users.set_password(user["id"], password)
+    except DataError as exc:
         raise SystemExit(str(exc))
     print(f"Password updated for '{user['name']}'. They will need to log in again on every device.")
 
@@ -110,17 +110,17 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = parse_args()
 
-    db.init_db()
+    schema.init_db()
     if args.reset_password:
         reset_password(args.reset_password)
         return
     if args.seed_demo:
-        if not db.is_base_currency_set():
-            db.set_base_currency(db.DEFAULT_BASE_CURRENCY)
-        db.seed_demo_user()
+        if not settings.is_base_currency_set():
+            settings.set_base_currency(settings.DEFAULT_BASE_CURRENCY)
+        demo.seed_demo_user()
         log.info("Demo data is ready (user 'Demo').")
 
-    log.info("Database: %s", db.get_db_path())
+    log.info("Database: %s", core.get_db_path())
     log.info("Open http://localhost:%d", args.port)
     address = lan_address()
     if address:

@@ -13,18 +13,15 @@ import hmac, time
 
 from nicegui import app
 
-import db
+from db import DataError, users
 import rates
-
-USER_KEY = "user_id"
-CURRENCY_KEY = "display_currency"
-
 
 # --------------------------------------------------------------------------
 # Active user
 # --------------------------------------------------------------------------
 
 USER_KEY = "user_id"
+CURRENCY_KEY = "display_currency"
 AUTH_KEY = "auth"
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
@@ -36,8 +33,8 @@ def get_current_user() -> dict[str, Any] | None:
     stored = app.storage.user.get(USER_KEY)
     if stored is None:
         return None
-    user = db.get_user(stored)
-    token = db.session_token(stored) if user else None
+    user = users.get_user(stored)
+    token = users.session_token(stored) if user else None
     if token is None or not hmac.compare_digest(str(app.storage.user.get(AUTH_KEY, "")), token):
         return None
     return user
@@ -46,7 +43,7 @@ def get_current_user() -> dict[str, Any] | None:
 def log_in(user_id: int) -> None:
     """Remember this device as logged in (valid until the password changes or they log out)."""
     app.storage.user[USER_KEY] = user_id
-    app.storage.user[AUTH_KEY] = db.session_token(user_id)
+    app.storage.user[AUTH_KEY] = users.session_token(user_id)
 
 
 def log_out() -> None:
@@ -59,10 +56,10 @@ def try_login(user_id: int, password: str) -> None:
     recent = [t for t in _failures.get(user_id, []) if now - t < LOCKOUT_SECONDS]
     if len(recent) >= MAX_FAILURES:
         wait = int(LOCKOUT_SECONDS - (now - recent[0])) + 1
-        raise db.DataError(f"Too many wrong passwords. Try again in {wait} seconds.")
-    if not db.verify_password(user_id, password):
+        raise DataError(f"Too many wrong passwords. Try again in {wait} seconds.")
+    if not users.verify_password(user_id, password):
         _failures[user_id] = [*recent, now]
-        raise db.DataError("Wrong password.")
+        raise DataError("Wrong password.")
     _failures.pop(user_id, None)
     log_in(user_id)
 

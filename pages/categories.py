@@ -1,7 +1,7 @@
 """Categories page: view, add, rename, reorder and delete categories and subcategories.
 
 Two levels only: a top-level category has a kind (income/expense) and its
-subcategories inherit it. The two-level limit is enforced in ``db.add_category``
+subcategories inherit it. The two-level limit is enforced in ``db/categories.add_category``
 (this page only offers "add subcategory" on top-level categories).
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Any
 from nicegui import ui
 
 import components
-import db
+from db import DataError, categories
 
 
 def _label(category: dict[str, Any]) -> str:
@@ -33,7 +33,7 @@ def _ask_name(
         def submit() -> None:
             try:
                 on_submit(name.value)
-            except db.DataError as exc:
+            except DataError as exc:
                 components.notify_error(exc)
                 return
             dialog.close()
@@ -47,7 +47,7 @@ def _ask_name(
 
 def _delete_category(user_id: int, category: dict[str, Any], refresh: Callable[[], None]) -> None:
     """Delete a category, asking where to move its transactions if it has any."""
-    usage = db.category_usage(user_id, category["id"])
+    usage = categories.category_usage(user_id, category["id"])
     name = _label(category)
 
     if usage["subcategories"]:
@@ -55,7 +55,7 @@ def _delete_category(user_id: int, category: dict[str, Any], refresh: Callable[[
         return
 
     def delete(reassign_to: int | None = None) -> None:
-        db.delete_category(user_id, category["id"], reassign_to)
+        categories.delete_category(user_id, category["id"], reassign_to)
         ui.notify(f"Deleted '{name}'.", type="positive")
         refresh()
 
@@ -63,7 +63,7 @@ def _delete_category(user_id: int, category: dict[str, Any], refresh: Callable[[
         components.confirm_dialog("Delete category", f"Delete '{name}'?", "Delete", delete)
         return
 
-    options = db.category_options(user_id, kind=category["kind"], exclude_id=category["id"])
+    options = categories.category_options(user_id, kind=category["kind"], exclude_id=category["id"])
     if not options:
         ui.notify(
             f"'{name}' has {usage['transactions']} transaction(s) and there is no other "
@@ -83,8 +83,8 @@ def _delete_category(user_id: int, category: dict[str, Any], refresh: Callable[[
 
         def move_and_delete() -> None:
             try:
-                delete(target.value)
-            except db.DataError as exc:
+                categories.delete_category(user_id, category["id"], target.value)
+            except DataError as exc:
                 components.notify_error(exc)
                 return
             dialog.close()
@@ -111,7 +111,7 @@ async def categories_page() -> None:
 
     @ui.refreshable
     def category_list() -> None:
-        tree = db.get_category_tree(user_id)
+        tree = categories.get_category_tree(user_id)
         if not tree:
             components.info_message("No categories yet. Add one above.", "category")
             return
@@ -140,8 +140,8 @@ async def categories_page() -> None:
                         ui.label("No subcategories").classes("text-caption text-grey-7 q-pl-md")
                     for child_index, child in enumerate(top["children"]):
                         child = {**child, "parent_name": top["name"]}
-                        protected = db.is_other(child)
-                        movable = sum(not db.is_other(c) for c in top["children"])
+                        protected = categories.is_other(child)
+                        movable = sum(not categories.is_other(c) for c in top["children"])
                         with ui.row().classes("w-full items-center justify-between q-pl-md"):
                             ui.label(child["name"])
                             with ui.row().classes("gap-1"):
@@ -157,30 +157,30 @@ async def categories_page() -> None:
     def move(category: dict[str, Any], direction: int) -> None:
         """Move a category up (-1) or down (+1) within its group."""
         try:
-            db.move_category(user_id, category["id"], direction)
-        except db.DataError as exc:
+            categories.move_category(user_id, category["id"], direction)
+        except DataError as exc:
             components.notify_error(exc)
             return
         category_list.refresh()
 
     def add_subcategory(parent: dict[str, Any]) -> None:
         def submit(name: str) -> None:
-            db.add_category(user_id, name, parent_id=parent["id"])
+            categories.add_category(user_id, name, parent_id=parent["id"])
             category_list.refresh()
 
         _ask_name(f"Add subcategory to '{parent['name']}'", "Name", "", "Add", submit)
 
     def rename(category: dict[str, Any]) -> None:
         def submit(name: str) -> None:
-            db.rename_category(user_id, category["id"], name)
+            categories.rename_category(user_id, category["id"], name)
             category_list.refresh()
 
         _ask_name("Rename category", "New name", category["name"], "Rename", submit)
 
     def add_top_level() -> None:
         try:
-            db.add_category(user_id, new_name.value, None, new_kind.value)
-        except db.DataError as exc:
+            categories.add_category(user_id, new_name.value, None, new_kind.value)
+        except DataError as exc:
             components.notify_error(exc)
             return
         new_name.value = ""

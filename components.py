@@ -16,7 +16,7 @@ from typing import Any
 
 from nicegui import app, ui
 
-import db
+from db import DataError, users, settings, transactions
 import rates
 import state
 
@@ -74,7 +74,7 @@ def confirm_dialog(
         def confirm() -> None:
             try:
                 on_confirm()
-            except db.DataError as exc:
+            except DataError as exc:
                 notify_error(exc)
                 return
             dialog.close()
@@ -121,15 +121,15 @@ def _passwords_match(first: ui.input, second: ui.input) -> bool:
     return True
 
 
-def _build_login(users: list[dict[str, Any]]) -> None:
+def _build_login(user_list: list[dict[str, Any]]) -> None:
     """Login card. Users without a password are asked to choose one instead."""
-    by_id = {u["id"]: u for u in users}
+    by_id = {u["id"]: u for u in user_list}
     stored = app.storage.user.get(state.USER_KEY)
     with ui.card().classes("absolute-center w-96 gap-3"):
         ui.label(f"Welcome to {APP_TITLE}").classes("text-h5")
         choice = ui.select(
-            {u["id"]: u["name"] for u in users},
-            value=stored if stored in by_id else users[0]["id"], label="User",
+            {u["id"]: u["name"] for u in user_list},
+            value=stored if stored in by_id else user_list[0]["id"], label="User",
         ).classes("w-full")
         form = ui.column().classes("w-full gap-3")
 
@@ -144,7 +144,7 @@ def _build_login(users: list[dict[str, Any]]) -> None:
                     def submit() -> None:
                         try:
                             state.try_login(user["id"], password.value or "")
-                        except db.DataError as exc:
+                        except DataError as exc:
                             notify_error(exc)
                             password.value = ""
                             return
@@ -161,9 +161,9 @@ def _build_login(users: list[dict[str, Any]]) -> None:
                         if not _passwords_match(first, second):
                             return
                         try:
-                            db.set_password(user["id"], first.value or "")
+                            users.set_password(user["id"], first.value or "")
                             state.log_in(user["id"])
-                        except db.DataError as exc:
+                        except DataError as exc:
                             notify_error(exc)
                             return
                         ui.navigate.reload()
@@ -190,12 +190,12 @@ def _build_change_password_dialog(user_id: int) -> ui.dialog:
         def save() -> None:
             if not _passwords_match(first, second):
                 return
-            if not db.verify_password(user_id, current.value or ""):
+            if not users.verify_password(user_id, current.value or ""):
                 ui.notify("Current password is wrong.", type="negative")
                 return
             try:
-                db.set_password(user_id, first.value or "")
-            except db.DataError as exc:
+                users.set_password(user_id, first.value or "")
+            except DataError as exc:
                 notify_error(exc)
                 return
             state.log_in(user_id)  # this device stays logged in; others are logged out
@@ -218,8 +218,8 @@ def _build_add_user_dialog() -> ui.dialog:
             if not _passwords_match(first, second):
                 return
             try:
-                db.add_user(name.value, first.value or "")
-            except db.DataError as exc:
+                users.add_user(name.value, first.value or "")
+            except DataError as exc:
                 notify_error(exc)
                 return
             dialog.close()
@@ -238,19 +238,19 @@ def _build_delete_user_dialog(user: dict[str, Any]) -> ui.dialog:
         ui.label("Delete your account").classes("text-h6")
         ui.label(
             f"This permanently deletes '{user['name']}' and everything they have recorded: "
-            f"{db.transaction_count(user['id'])} transaction(s) and all of their categories. "
+            f"{transactions.transaction_count(user['id'])} transaction(s) and all of their categories. "
             "This cannot be undone. Make a backup first if you are unsure."
         ).classes("text-negative")
         password = ui.input("Enter your password to confirm", password=True,
                             password_toggle_button=True).classes("w-full")
 
         def delete() -> None:
-            if not db.verify_password(user["id"], password.value or ""):
+            if not users.verify_password(user["id"], password.value or ""):
                 ui.notify("Wrong password.", type="negative")
                 return
             try:
-                db.delete_user(user["id"])
-            except db.DataError as exc:
+                users.delete_user(user["id"])
+            except DataError as exc:
                 notify_error(exc)
                 return
             state.log_out()
@@ -321,7 +321,7 @@ def _build_first_run_setup(need_currency: bool, need_user: bool) -> None:
                 "All amounts are stored in it, so choose carefully."
             ).classes("text-grey-7")
             currency = ui.select(
-                list(rates.CURRENCY_SYMBOLS), value=db.DEFAULT_BASE_CURRENCY,
+                list(rates.CURRENCY_SYMBOLS), value=settings.DEFAULT_BASE_CURRENCY,
                 label="Base currency", with_input=True, new_value_mode="add-unique",
             ).classes("w-full")
         name = first = second = None
@@ -340,11 +340,11 @@ def _build_first_run_setup(need_currency: bool, need_user: bool) -> None:
                     return
             try:
                 if currency is not None:
-                    db.set_base_currency(currency.value)
+                    settings.set_base_currency(currency.value)
                 if name is not None:
                     # new: create the user with their password, then log this device in
-                    state.log_in(db.add_user(name.value, first.value or ""))
-            except db.DataError as exc:
+                    state.log_in(users.add_user(name.value, first.value or ""))
+            except DataError as exc:
                 notify_error(exc)
                 return
             ui.navigate.reload()
@@ -364,14 +364,14 @@ async def build_layout(active: str) -> PageContext | None:
     ``active`` is the navigation label to highlight. Returns ``None`` (after
     showing the setup card) when the base currency or the first user is missing.
     """
-    users = db.list_users()
-    need_currency = not db.is_base_currency_set()
-    if need_currency or not users:
-        _build_first_run_setup(need_currency=need_currency, need_user=not users)
+    user_list = users.list_users()
+    need_currency = not settings.is_base_currency_set()
+    if need_currency or not user_list:
+        _build_first_run_setup(need_currency=need_currency, need_user=not user_list)
         return None
     user = state.get_current_user()
     if user is None:
-        _build_login(users)
+        _build_login(user_list)
         return None
 
     status = await rates.ensure_rates_async()

@@ -1,6 +1,6 @@
 """Backups page: save the database to a timestamped file, download, restore or delete backups.
 
-Save as ``pages/backups.py``. All file handling lives in ``db.py`` (see the
+Save as ``pages/backups.py``. All file handling lives in ``db/backups.py`` (see the
 Backups section there); this page only provides the buttons and dialogs.
 
 Restoring replaces ALL data for ALL users, so it always asks first and saves a
@@ -14,7 +14,7 @@ from typing import Any
 from nicegui import ui
 
 import components
-import db
+from db import DataError, backups
 
 
 def _size(num_bytes: int) -> str:
@@ -36,11 +36,11 @@ async def backups_page() -> None:
 
     @ui.refreshable
     def backup_list() -> None:
-        backups = db.list_backups()
-        if not backups:
+        backup_list = backups.list_backups()
+        if not backup_list:
             components.info_message("No backups yet. Click 'Back up now' above.", "backup")
             return
-        for item in backups:
+        for item in backup_list:
             with ui.card().classes("w-full"):
                 with ui.row().classes("w-full items-center justify-between"):
                     with ui.column().classes("gap-0"):
@@ -58,8 +58,8 @@ async def backups_page() -> None:
 
     def back_up_now() -> None:
         try:
-            name = db.create_backup()
-        except db.DataError as exc:
+            name = backups.create_backup()
+        except DataError as exc:
             components.notify_error(exc)
             return
         ui.notify(f"Saved {name}", type="positive")
@@ -67,13 +67,13 @@ async def backups_page() -> None:
 
     def download(item: dict[str, Any]) -> None:
         try:
-            ui.download(db.resolve_backup(item["name"]))
-        except db.DataError as exc:
+            ui.download(backups.resolve_backup(item["name"]))
+        except DataError as exc:
             components.notify_error(exc)
 
     def delete(item: dict[str, Any]) -> None:
         def do_delete() -> None:
-            db.delete_backup(item["name"])
+            backups.delete_backup(item["name"])
             ui.notify(f"Deleted {item['name']}", type="positive")
             backup_list.refresh()
 
@@ -83,7 +83,7 @@ async def backups_page() -> None:
 
     def restore(item: dict[str, Any]) -> None:
         def do_restore() -> None:
-            safety = db.restore_backup(item["name"])
+            safety = backups.restore_backup(item["name"])
             ui.notify(f"Restored {item['name']}. Previous data saved as {safety}.", type="positive")
             ui.navigate.reload()
 
@@ -96,11 +96,11 @@ async def backups_page() -> None:
         )
 
     async def handle_upload(event: Any) -> None:
-        temp = db.get_backup_dir() / f".upload-{uuid.uuid4().hex}.tmp.db"
+        temp = backups.get_backup_dir() / f".upload-{uuid.uuid4().hex}.tmp.db"
         try:
             temp.write_bytes(await event.file.read())
-            name = db.import_backup_file(temp, event.file.name)
-        except db.DataError as exc:
+            name = backups.import_backup_file(temp, event.file.name)
+        except DataError as exc:
             components.notify_error(exc)
             return
         finally:
@@ -112,7 +112,7 @@ async def backups_page() -> None:
     with components.content():
         ui.label("Backups").classes("text-h5")
         ui.label(
-            f"Backups are full copies of the database, saved in {db.get_backup_dir()}. "
+            f"Backups are full copies of the database, saved in {backups.get_backup_dir()}. "
             "Restoring replaces the data of all users."
         ).classes("text-grey-7")
 

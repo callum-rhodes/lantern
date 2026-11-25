@@ -12,7 +12,7 @@ from typing import Any
 from nicegui import ui
 
 import components
-import db
+from db import DataError, transactions, categories, recurring, users
 import rates
 import shared_ui
 
@@ -100,13 +100,13 @@ class TransactionForm:
 
     def _top_options(self, kind: str) -> dict[int, str]:
         """Top-level categories of the chosen type."""
-        return {c["id"]: c["name"] for c in db.list_top_level(self.user_id, kind)}
+        return {c["id"]: c["name"] for c in categories.list_top_level(self.user_id, kind)}
 
     def _sub_options(self, top_id: int | None) -> dict[int, str]:
         """Subcategories of the chosen category."""
         if top_id is None:
             return {}
-        return {c["id"]: c["name"] for c in db.list_subcategories(self.user_id, top_id)}
+        return {c["id"]: c["name"] for c in categories.list_subcategories(self.user_id, top_id)}
 
     def _on_kind_change(self, event: Any) -> None:
         self.category.set_options(self._top_options(event.value), value=None)
@@ -124,14 +124,14 @@ class TransactionForm:
         try:
             date.fromisoformat(day)
         except ValueError as exc:
-            raise db.DataError("Please pick a valid date.") from exc
+            raise DataError("Please pick a valid date.") from exc
         if self.amount.value is None:
-            raise db.DataError("Please enter an amount.")
+            raise DataError("Please enter an amount.")
         cents = rates.amount_to_cents(self.amount.value)
         if cents <= 0:
-            raise db.DataError("The amount must be greater than zero.")
+            raise DataError("The amount must be greater than zero.")
         if self.category.value is None:
-            raise db.DataError("Please choose a category.")
+            raise DataError("Please choose a category.")
         category_id = self.subcategory.value or self.category.value
         signed = cents if self.kind.value == "income" else -cents
         return day, signed, category_id, (self.description.value or "").strip()
@@ -152,13 +152,13 @@ async def transactions_page() -> None:
     shown: dict[int, dict[str, Any]] = {}  # transactions currently in the table, by id
 
     try:
-        db.generate_pending(user_id)
-    except db.DataError as exc:
+        recurring.generate_pending(user_id)
+    except DataError as exc:
         components.notify_error(exc)
 
     @ui.refreshable
     def transaction_table() -> None:
-        txns = db.list_transactions(
+        txns = transactions.list_transactions(
             user_id,
             date_from=date_from.value or None,
             date_to=date_to.value or None,
@@ -169,7 +169,7 @@ async def transactions_page() -> None:
         shown.update({t["id"]: t for t in txns})
 
         if not txns:
-            if db.transaction_count(user_id) == 0:
+            if transactions.transaction_count(user_id) == 0:
                 components.info_message("No transactions yet. Add your first one above.", "receipt_long")
             else:
                 components.info_message("No transactions match the filters.", "filter_alt_off")
@@ -200,8 +200,8 @@ async def transactions_page() -> None:
     def add_transaction() -> None:
         try:
             tx_date, cents, category_id, description = form.read()
-            db.add_transaction(user_id, tx_date, cents, category_id, description)
-        except db.DataError as exc:
+            transactions.add_transaction(user_id, tx_date, cents, category_id, description)
+        except DataError as exc:
             components.notify_error(exc)
             return
         ui.notify("Transaction added.", type="positive")
@@ -223,8 +223,8 @@ async def transactions_page() -> None:
             def save() -> None:
                 try:
                     tx_date, cents, category_id, description = edit_form.read()
-                    db.update_transaction(user_id, transaction_id, tx_date, cents, category_id, description)
-                except db.DataError as exc:
+                    transactions.update_transaction(user_id, transaction_id, tx_date, cents, category_id, description)
+                except DataError as exc:
                     components.notify_error(exc)
                     return
                 dialog.close()
@@ -245,7 +245,7 @@ async def transactions_page() -> None:
             return
         
         def delete() -> None:
-            db.delete_transaction(user_id, transaction_id)
+            transactions.delete_transaction(user_id, transaction_id)
             ui.notify("Transaction deleted.", type="positive")
             transaction_table.refresh()
 
@@ -277,7 +277,7 @@ async def transactions_page() -> None:
             return
         try:
             tx_date, cents, category_id, description = form.read()
-        except db.DataError as exc:
+        except DataError as exc:
             components.notify_error(exc)
             return
         shared_ui.open_split_dialog(
@@ -308,16 +308,16 @@ async def transactions_page() -> None:
         """Signed cents from the item's amount box (typed positive, sign follows the type)."""
         field = pending_inputs.get(item["id"])
         if field is None or field.value is None:
-            raise db.DataError("Please enter an amount.")
+            raise DataError("Please enter an amount.")
         cents = rates.amount_to_cents(field.value)
         if cents <= 0:
-            raise db.DataError("The amount must be greater than zero.")
+            raise DataError("The amount must be greater than zero.")
         return cents if item["kind"] == "income" else -cents
 
     @ui.refreshable
     def pending_list() -> None:
         pending_inputs.clear()
-        items = db.list_pending(user_id)
+        items = recurring.list_pending(user_id)
         if not items:
             return
         with ui.card().classes("w-full"):
@@ -346,10 +346,10 @@ async def transactions_page() -> None:
     def review(item: dict[str, Any], accept: bool) -> None:
         try:
             if accept:
-                db.accept_pending(user_id, item["id"], _pending_cents(item))
+                recurring.accept_pending(user_id, item["id"], _pending_cents(item))
             else:
-                db.reject_pending(user_id, item["id"])
-        except db.DataError as exc:
+                recurring.reject_pending(user_id, item["id"])
+        except DataError as exc:
             components.notify_error(exc)
             return
         pending_list.refresh()
@@ -358,16 +358,16 @@ async def transactions_page() -> None:
 
     def accept_all() -> None:
         try:
-            for item in db.list_pending(user_id):
-                db.accept_pending(user_id, item["id"], _pending_cents(item))
-        except db.DataError as exc:
+            for item in recurring.list_pending(user_id):
+                recurring.accept_pending(user_id, item["id"], _pending_cents(item))
+        except DataError as exc:
             components.notify_error(exc)  # stops at the first problem; earlier ones are accepted
         pending_list.refresh()
         transaction_table.refresh()
 
     @ui.refreshable
     def recurring_list() -> None:
-        rules = db.list_recurring(user_id)
+        rules = recurring.list_recurring(user_id)
         if not rules:
             components.info_message("No recurring transactions yet.", "event_repeat")
             return
@@ -389,15 +389,15 @@ async def transactions_page() -> None:
 
     def toggle_rule(rule: dict[str, Any]) -> None:
         try:
-            db.set_recurring_active(user_id, rule["id"], not rule["active"])
-        except db.DataError as exc:
+            recurring.set_recurring_active(user_id, rule["id"], not rule["active"])
+        except DataError as exc:
             components.notify_error(exc)
             return
         recurring_list.refresh()
 
     def delete_rule(rule: dict[str, Any]) -> None:
         def delete() -> None:
-            db.delete_recurring(user_id, rule["id"])
+            recurring.delete_recurring(user_id, rule["id"])
             recurring_list.refresh()
             pending_list.refresh()
 
@@ -426,12 +426,12 @@ async def transactions_page() -> None:
                     day, cents, category_id, description = rform.read()
                     n = int(every.value or 0)
                     if rule:
-                        db.update_recurring(user_id, rule["id"], day, cents, category_id,
-                                            description, n, unit.value)
+                        recurring.update_recurring(user_id, rule["id"], day, cents, category_id,
+                                                   description, n, unit.value)
                     else:
-                        db.add_recurring(user_id, day, cents, category_id, description, n, unit.value)
-                    db.generate_pending(user_id)
-                except db.DataError as exc:
+                        recurring.add_recurring(user_id, day, cents, category_id, description, n, unit.value)
+                    recurring.generate_pending(user_id)
+                except DataError as exc:
                     components.notify_error(exc)
                     return
                 dialog.close()
@@ -458,7 +458,7 @@ async def transactions_page() -> None:
                     f"The table below shows {ctx.display.code}."
                 ).classes("text-caption text-grey-7")
             share = ui.switch("Share with other users", on_change=on_share_toggle)
-            if len(db.list_users()) < 2:
+            if len(users.list_users()) < 2:
                 share.set_enabled(False)
                 share.tooltip("Add another user first (header, person icon).")
             add_button = ui.button("Add transaction", icon="add", on_click=add_or_share)
@@ -478,7 +478,7 @@ async def transactions_page() -> None:
                 date_to = ui.input("To", on_change=lambda: transaction_table.refresh())
                 date_to.props("type=date clearable")
                 category_filter = ui.select(
-                    db.category_options(user_id), label="Category", clearable=True, with_input=True,
+                    categories.category_options(user_id), label="Category", clearable=True, with_input=True,
                     on_change=lambda: transaction_table.refresh(),
                 ).classes("w-56")
                 search = ui.input("Search description", on_change=lambda: transaction_table.refresh())
