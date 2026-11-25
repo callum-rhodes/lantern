@@ -141,22 +141,38 @@ def _style(fig: go.Figure, display: state.Display) -> go.Figure:
     )
     return fig
 
+def _add_average_line(fig, labels, display, cents, name, colour, factor=1) -> None:
+    """Flat dashed line at an average value (skipped when there is no average yet)."""
+    if cents is None:
+        return
+    fig.add_scatter(
+        name=name, x=labels, y=[display.major(cents * factor)] * len(labels),
+        mode="lines", line={"color": colour, "dash": "dash"}, hovertemplate=HOVER,
+    )
 
-def _monthly_figure(pivot, periods, display) -> go.Figure:
+AVG_EXPENSE_COLOR = "#ff9800"
+
+def _monthly_figure(pivot, periods, display, averages=None, kind="expense", all_years=False) -> go.Figure:
     keys, labels = periods
     fig = go.Figure()
     for label, by_period in pivot.items():
         fig.add_bar(
-            name=label,
-            x=labels,
+            name=label, x=labels,
             y=[display.major(by_period.get(k, 0)) for k in keys],
             hovertemplate=HOVER,
         )
     fig.update_layout(barmode="stack")
+    if averages:
+        word = "expenses" if kind == "expense" else "income"
+        _add_average_line(
+            fig, labels, display, averages[word],
+            f"Avg {word} / {'year' if all_years else 'month'}", AVG_EXPENSE_COLOR,
+            factor=12 if all_years else 1,
+        )
     return _style(fig, display)
 
 
-def _income_expense_figure(rows, periods, display) -> go.Figure:
+def _income_expense_figure(rows, periods, display, averages=None, all_years=False) -> go.Figure:
     keys, labels = periods
     by_period = {row["month"]: row for row in rows}
     income = [by_period.get(k, {}).get("income", 0) for k in keys]
@@ -170,6 +186,12 @@ def _income_expense_figure(rows, periods, display) -> go.Figure:
                     y=[display.major(i - e) for i, e in zip(income, expenses)],
                     line={"color": NET_COLOR}, hovertemplate=HOVER)
     fig.update_layout(barmode="group")
+    if averages:
+        _add_average_line(
+            fig, labels, display, averages["net"],
+            f"Avg net / {'year' if all_years else 'month'}", NET_COLOR,
+            factor=12 if all_years else 1,
+        )
     return _style(fig, display)
 
 
@@ -378,7 +400,7 @@ async def overview_page() -> None:
             if not pivot:
                 components.info_message(f"No {kind} data for {year_text} with this selection.", "bar_chart")
             else:
-                fig = _monthly_figure(pivot, periods, display)
+                fig = _monthly_figure(pivot, periods, display, averages, kind, all_years)
                 ui.label("Click a bar segment to drill into that category.").classes("text-caption text-grey-7")
                 chart = ui.plotly(fig).classes("w-full")
 
@@ -398,7 +420,7 @@ async def overview_page() -> None:
             if not ie_rows:
                 components.info_message(f"No data for {year_text} with this selection.", "bar_chart")
             else:
-                ui.plotly(_income_expense_figure(ie_rows, periods, display)).classes("w-full")
+                ui.plotly(_income_expense_figure(ie_rows, periods, display, averages, all_years)).classes("w-full")
 
             # Share of the total (pie with drill-down)
             ui.label(f"{kind_word.capitalize()} share by {level}, {year_text}").classes("text-h6")
