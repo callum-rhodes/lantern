@@ -24,6 +24,7 @@ APP_TITLE = "Lantern"
 NAV_LINKS: list[tuple[str, str]] = [
     ("Overview", "/"),
     ("Add Transactions", "/transactions"),
+    ("Shared Transactions", "/shared"),
     ("Edit Categories", "/categories"),
     ("Export CSV", "/export"),
     ("Import CSV", "/import"),

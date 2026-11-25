@@ -36,6 +36,7 @@ import pages.transactions  # noqa: E402,F401
 import pages.export  # noqa: E402,F401
 import pages.import_csv  # noqa: E402,F401
 import pages.backups  # noqa: E402,F401
+import pages.shared  # noqa: E402,F401
 
 log = logging.getLogger("finance_tracker")
 

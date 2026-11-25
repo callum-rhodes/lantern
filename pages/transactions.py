@@ -14,6 +14,7 @@ from nicegui import ui
 import components
 import db
 import rates
+import shared_ui
 
 # Quasar templates for the table. They only add the colour and the buttons;
 # the buttons send "edit"/"delete" events that are handled in Python below.
@@ -21,10 +22,23 @@ AMOUNT_SLOT = (
     '<q-td :props="props" class="text-right">'
     '<span :class="props.row.amount_class">{{ props.value }}</span></q-td>'
 )
+DESCRIPTION_SLOT = """
+<q-td :props="props">
+  <q-icon v-if="props.row.shared" name="group" size="xs" class="q-mr-xs">
+    <q-tooltip>Shared transaction</q-tooltip>
+  </q-icon>
+  {{ props.value }}
+</q-td>
+"""
 ACTIONS_SLOT = """
 <q-td :props="props" class="text-right">
-  <q-btn flat round dense icon="edit" @click="() => $parent.$emit('edit', props.row)" />
-  <q-btn flat round dense icon="delete" @click="() => $parent.$emit('delete', props.row)" />
+  <span>
+    <q-btn flat round dense icon="edit" :disable="props.row.shared"
+           @click="() => $parent.$emit('edit', props.row)" />
+    <q-btn flat round dense icon="delete" :disable="props.row.shared"
+           @click="() => $parent.$emit('delete', props.row)" />
+    <q-tooltip v-if="props.row.shared">Shared: change it on the Shared Transactions page</q-tooltip>
+  </span>
 </q-td>
 """
 
@@ -171,12 +185,14 @@ async def transactions_page() -> None:
                 "category": _category_label(t),
                 "amount": ctx.display.money(t["amount_cents"]),
                 "amount_class": components.amount_class(t["amount_cents"]),
+                "shared": t["shared_id"] is not None,
             }
             for t in txns
         ]
         table = ui.table(columns=TABLE_COLUMNS, rows=rows, row_key="id", pagination=15)
         table.props("flat bordered").classes("w-full")
         table.add_slot("body-cell-amount", AMOUNT_SLOT)
+        table.add_slot("body-cell-description", DESCRIPTION_SLOT)
         table.add_slot("body-cell-actions", ACTIONS_SLOT)
         table.on("edit", lambda e: edit_transaction(e.args["id"]))
         table.on("delete", lambda e: delete_transaction(e.args["id"]))
@@ -195,6 +211,9 @@ async def transactions_page() -> None:
     def edit_transaction(transaction_id: int) -> None:
         txn = shown.get(transaction_id)
         if txn is None:
+            return
+        if txn["shared_id"] is not None:
+            ui.notify("Shared transactions are managed on the Shared Transactions page.", type="warning")
             return
         dialog = components.new_dialog()
         with dialog, ui.card().classes("w-full max-w-5xl"):
@@ -221,7 +240,10 @@ async def transactions_page() -> None:
         txn = shown.get(transaction_id)
         if txn is None:
             return
-
+        if txn["shared_id"] is not None:
+            ui.notify("Shared transactions are managed on the Shared Transactions page.", type="warning")
+            return
+        
         def delete() -> None:
             db.delete_transaction(user_id, transaction_id)
             ui.notify("Transaction deleted.", type="positive")
@@ -235,6 +257,49 @@ async def transactions_page() -> None:
         date_to.value = None
         category_filter.value = None
         search.value = ""
+
+    # Shared transactions
+    def on_share_toggle(event: Any) -> None:
+        """While sharing, only expenses make sense, and the button opens the split dialog."""
+        if event.value:
+            form.kind.value = "expense"
+            form.kind.disable()
+            add_button.set_text("Set up split…")
+            add_button.props("icon=call_split")
+        else:
+            form.kind.enable()
+            add_button.set_text("Add transaction")
+            add_button.props("icon=add")
+
+    def add_or_share() -> None:
+        if not share.value:
+            add_transaction()
+            return
+        try:
+            tx_date, cents, category_id, description = form.read()
+        except db.DataError as exc:
+            components.notify_error(exc)
+            return
+        shared_ui.open_split_dialog(
+            ctx,
+            {"date": tx_date, "description": description, "total": abs(cents) / 100,
+             "category_id": category_id},
+            on_saved=shared_saved,
+        )
+
+    def shared_saved() -> None:
+        form.clear()
+        share.value = False  # back to a normal add; on_share_toggle restores the form
+        transaction_table.refresh()
+
+    def on_shared_change() -> None:
+        """After accepting or rejecting a share: refresh the card and the table."""
+        shared_pending_list.refresh()
+        transaction_table.refresh()
+
+    @ui.refreshable
+    def shared_pending_list() -> None:
+        shared_ui.pending_shared_card(ctx, on_shared_change)
 
     # Recurring input gubbins
     pending_inputs: dict[int, Any] = {}  # amount box per pending item, by id
@@ -380,18 +445,23 @@ async def transactions_page() -> None:
 
     with components.content():
         ui.label("Transactions").classes("text-h5")
+        shared_pending_list()
         pending_list()
 
         with ui.card().classes("w-full"):
             ui.label("Add a transaction").classes("text-subtitle1 text-bold")
             form = TransactionForm(user_id, ctx.base_currency)
-            form.description.on("keydown.enter", add_transaction)
+            form.description.on("keydown.enter", add_or_share)
             if ctx.display.code != ctx.base_currency:
                 ui.label(
                     f"Amounts are entered in {ctx.base_currency}, your base currency. "
                     f"The table below shows {ctx.display.code}."
                 ).classes("text-caption text-grey-7")
-            ui.button("Add transaction", icon="add", on_click=add_transaction)
+            share = ui.switch("Share with other users", on_change=on_share_toggle)
+            if len(db.list_users()) < 2:
+                share.set_enabled(False)
+                share.tooltip("Add another user first (header, person icon).")
+            add_button = ui.button("Add transaction", icon="add", on_click=add_or_share)
 
         with ui.expansion("Recurring transactions", icon="event_repeat", value=True).classes("w-full") \
                 .props("header-class=text-subtitle1"):

@@ -8,6 +8,7 @@ LANtern is a small, self-hosted personal finance tracker for your home network. 
 - Two-level categories (category > subcategory), income and expense, in an order you choose
 - Everything is recorded in one base currency; view it in any currency Frankfurter publishes rates for
 - Recurring transactions (every N days, weeks or months) that wait in a review list, where you accept (optionally changing the amount) or reject each one
+- Shared expenses: split a transaction between users (who paid and who owes, by amount or percentage). The others accept it into their own categories or reject it, each pair of users has a running balance, and one click settles it up
 - Overview page with summary cards, a colour-scaled month x category table, drill-down charts and an income vs expenses chart
 - Import transactions from a bank CSV, export your data as CSV, and back up or restore the whole database
 - Runs directly with Python or in a Docker container
@@ -19,7 +20,8 @@ LANtern is a small, self-hosted personal finance tracker for your home network. 
 | Page | Route | What it does |
 | --- | --- | --- |
 | Overview | `/` (also `/overview`) | Summary cards, month x category table, stacked monthly bars, income vs expenses, share pie |
-| Add Transactions | `/transactions` | Add, filter, edit and delete transactions; manage recurring transactions and review the ones that are due |
+| Add Transactions | `/transactions` | Add, filter, edit and delete transactions; share an expense with other users; manage recurring transactions; review recurring and shared items waiting for you |
+| Shared Transactions | `/shared` | Balances with other users, settle up, and the list of shared transactions and settlements |
 | Edit Categories | `/categories` | Add, rename, reorder and delete categories and subcategories |
 | Export CSV | `/export` | Download transactions and/or month x category totals |
 | Import CSV | `/import` | Load a bank CSV with automatic category matching |
@@ -58,6 +60,15 @@ python main.py --seed-demo
 ```
 
 This creates a user called **Demo** with about three years of random transactions so you can see the charts. It does nothing if Demo already has transactions. The Demo user has no password; you will be asked to choose one the first time you log in as Demo.
+
+### Run the tests
+
+```bash
+python test_shared.py          # database tests for shared transactions
+python test_split_model.py     # tests for the split dialog's arithmetic
+```
+
+The database tests use a temporary database, so your `finance.db` is never touched.
 
 ## Run with Docker
 
@@ -148,7 +159,7 @@ It asks for the new password twice, saves it and exits. That user is logged out 
 - **Log in** from the card shown on each device. The login is remembered on that device until you use the **Log out** button in the header.
 - **Add user** (header) lets any logged-in user create a new user with a name and password. You stay logged in as yourself; the new user logs in on their own device.
 - **Change password** (key icon) asks for your current password. Your other devices are logged out and this one stays logged in.
-- **Delete my account** (header) permanently deletes your own user and all their data after confirming your password. Users cannot delete each other. Deleting the last user returns the app to the first-run setup.
+- **Delete my account** (header) permanently deletes your own user and all their data after confirming your password. Users cannot delete each other. Deleting the last user returns the app to the first-run setup. It is blocked while you have unsettled shared balances or shared transactions waiting for you; once you are settled up, the shared records stay with the other users and show you as "Deleted user #n".
 - After 5 wrong passwords a user is locked out for 5 minutes (this resets if the app restarts).
 
 ### Overview
@@ -162,6 +173,8 @@ It asks for the new password twice, saves it and exits. That user is logged out 
 
 Type the amount as a positive number and use the Income/Expense toggle to set the sign. Amounts are entered in the base currency; the table shows the current display currency. If you don't choose a subcategory, the transaction goes into that category's **Other** subcategory. You can filter by date, category (including its subcategories) and description, and edit or delete rows from the table.
 
+Transactions that come from a shared split show a group icon and can't be edited or deleted here (see "Shared transactions" below).
+
 #### Recurring transactions
 
 Open **Recurring transactions** on this page and choose **New recurring transaction**. A rule has a type, amount, category, optional description, a first date and a repeat interval of *every N days, weeks or months*. Monthly rules keep their day of the month, falling back to the last day in shorter months (31 Jan, 28 Feb, 31 Mar).
@@ -172,6 +185,22 @@ Open **Recurring transactions** on this page and choose **New recurring transact
 - **Edit** a rule to change its amount, category, description, interval or **next date**. Changes affect future occurrences only; items already waiting for review keep their original values.
 - **Stop** pauses a rule (it stays in the list, greyed out) and **Resume** restarts it. Dates that passed while it was stopped are skipped rather than added to the review list. **Delete** removes the rule and its waiting items; transactions you already accepted are kept.
 - Deleting a category moves its recurring rules and waiting items to the replacement category you choose, along with its transactions.
+
+### Shared transactions
+
+Turn on **Share with other users** on the Add card (new expenses only; the switch is disabled until there is a second user). The Income/Expense toggle is locked to Expense and the button becomes **Set up split...**, which opens a dialog with the date, description, total and category from the form. Amounts are in the base currency.
+
+1. Pick who is in the split (you are always in it, and at least one other person is needed).
+2. For each person enter what they **paid** and what they **owe**, in currency or percent. The toggle above each column converts what you have typed. **Owes** starts as an even split and **Paid** as "you paid all"; the **Split evenly** and **Creator paid all** buttons put them back. A column stops following the total once you type in it. Each column shows what is left to assign, and **Create shared transaction** is enabled when both add up to the total.
+3. Your share is added to your transactions straight away, and the switch turns itself off again. Everyone else gets a pending item in the **Shared transactions awaiting your review** card at the top of their Transactions page, where they choose an expense category and **Accept** or **Reject**. They can't change the amounts. Someone who owes nothing (for example, the person who paid everything) gets no transaction and no pending item.
+
+The **Shared Transactions** page shows your balance with each person ("B owes you", "You owe B" or "All settled with B") and a list of shared transactions and settlements, newest first. Balances include shares that are still pending.
+
+- **Mark as settled** records a settlement that zeroes the balance with one person, after asking you to confirm the amount. Either of you can click it. It fails with a "balance changed" message if the balance moved since you opened the dialog. Either of you can delete the settlement later, which brings the old balance back.
+- **Reject** only works while your share is pending. It cancels the split for everyone, removes every personal copy and leaves a **Rejected** record in the list. Rejected records don't count in balances, and anyone in the split can delete one to clear it.
+- **Delete** (the creator at any time, or a participant who has accepted) removes the shared transaction and every personal copy for everyone and leaves no record. Participants who are still pending use Reject instead.
+- Shared transactions can't be edited. Delete and recreate instead.
+- Because settlements are kept, deleting a shared transaction after settling it can flip the balance: the person who was owed now owes the difference back.
 
 ### Edit Categories
 
@@ -211,25 +240,33 @@ Amounts in the file are read as the base currency. The import is all-or-nothing:
 - **Logging in:** each user has a salted scrypt password hash in the `users` table (standard library `hashlib`, no extra dependency). After a successful login, the browser's `app.storage.user` holds the user id plus a token derived from that user's password hash. `state.get_current_user()` accepts the device only if the token still matches, so changing or resetting a password logs the user out everywhere. Failed logins are rate-limited per user in `state.try_login`. If the browser is not logged in, `build_layout()` shows the login card instead of the page.
 - **Currency display:** the selector in the header converts amounts at display time only. Stored data is never changed. Amounts you type into the form, import from a file or export in base currency are always in the base currency.
 - **Exchange rates** come from the free [Frankfurter](https://www.frankfurter.app) API and are cached in the database for 24 hours. If a refresh fails, the cached rates are used and a warning shows when they were last updated. After a failure it waits 10 minutes before trying again.
-- **Database upgrades:** `db.init_db()` creates missing tables (including the recurring-transaction tables, so older databases and backups pick them up automatically) and then runs small upgrades for databases from older versions (adding the `password_hash` column to `users`, adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
+- **Database upgrades:** `db.init_db()` creates missing tables (including the recurring-transaction and shared-transaction tables, so older databases and backups pick them up automatically) and then runs small upgrades for databases from older versions (adding the `password_hash` column to `users`, adding category ordering, and moving any transactions filed directly on a top-level category into its Other subcategory).
 - **Recurring transactions** are stored as rules (`recurring` table). Occurrence *i* falls on the start date plus *i* intervals, calculated from the start so month-end dates don't drift. When the Transactions page loads, `db.generate_pending` creates a row in `pending_transactions` for every occurrence dated before today (a unique index on rule and date prevents duplicates). Accepting a row inserts a normal transaction and removes the pending row.
+- **Shared transactions** use three tables created by `SCHEMA`: `shared_transactions` (the header: creator, date, description, total, active or rejected), `shared_participants` (each person's paid and owed cents, accepted or pending, and a link to their personal transaction) and `settlements`. Paid and owed each add up to the total. A participant who owes something gets an ordinary personal transaction of minus their share, linked through `shared_participants.transaction_id`: the creator's is created immediately and everyone else's when they accept. `db.update_transaction` and `db.delete_transaction` refuse linked rows, so the Shared Transactions page is the only way to change them. Deleting removes the participant rows, then the personal copies, then the header, in that order because of the foreign keys.
+- **Shared transaction maths** lives in `splits.py`, which imports nothing from the app. `percents_to_cents` turns percentages (which must add up to 100, give or take 0.05) into cents that add up exactly to the total, using largest-remainder rounding with ties going to the first person (the creator is always listed first), so 100.00 in thirds becomes 33.34 / 33.33 / 33.33. `pair_debts` takes each person's paid minus owed for one transaction and spreads every debtor's shortfall over the creditors in proportion to what they are owed.
+- **Balances are never stored.** `db.shared_balances` works out one signed net per other user from the active shared transactions (pending included, rejected excluded) plus the settlement entries. Settling records a settlement for the whole balance after re-checking it, and no transaction is ever marked "settled". The user-id columns of the shared tables are deliberately not foreign keys, so a settled-up user can delete their account while the records stay with the others (new user ids are never reused, so a newcomer can't inherit a deleted user's history).
 
 ## Project structure
 
 ```
 lantern/
-  main.py            entry point: options (including --reset-password), route registration, ui.run()
-  db.py              connection handling, schema, ALL SQL queries, password hashing, backups, demo data
-  rates.py           exchange-rate fetching/caching, money parsing and formatting
-  state.py           logged-in user (login, logout, rate limiting) and display currency (per browser)
-  components.py      page frame: header, navigation, login card, user/password dialogs, first-run setup, currency picker
+  main.py              entry point: options (including --reset-password), route registration, ui.run()
+  db.py                connection handling, schema, ALL SQL queries (including shared transactions and balances), password hashing, backups, demo data
+  splits.py            shared-transaction maths: percentages to cents, who owes whom (no app imports)
+  rates.py             exchange-rate fetching/caching, money parsing and formatting
+  state.py             logged-in user (login, logout, rate limiting) and display currency (per browser)
+  components.py        page frame: header, navigation, login card, user/password dialogs, first-run setup, currency picker
+  shared_ui.py         reusable shared-transaction widgets: the split dialog and the pending-shares card
   pages/
     overview.py      cards, charts, month x category table                                    (routes: / and /overview)
-    transactions.py  add/edit/delete form, recurring rules, review list, filters and table    (route: /transactions)
+    transactions.py  add/edit/delete form, share switch, recurring rules, review lists, filters and table    (route: /transactions)
+    shared.py        balances, settle up, shared transactions and settlements list            (route: /shared)
     categories.py    manage and reorder categories                                            (route: /categories)
     export.py        CSV export                                                               (route: /export)
     import_csv.py    CSV import with category matching                                        (route: /import)
     backups.py       save, download, upload, restore backups                                  (route: /backups)
+  test_shared.py       database tests for shared transactions
+  test_split_model.py  tests for the split dialog's arithmetic
   requirements.txt
   Dockerfile
   docker-compose.yml
@@ -243,11 +280,11 @@ Conventions worth knowing when you change things:
 - Problems a user can fix raise `db.DataError` with a friendly message; pages show it with `components.notify_error`.
 - Every page starts with `ctx = await components.build_layout("Name")` and puts its content inside `with components.content():`.
 - Money is always formatted through `rates.format_money` (usually via `ctx.display.money(cents)`).
+- Every `db` function that touches shared transactions takes the acting `user_id` and checks they are a participant (or the right party) before doing anything.
 - To add a page, create it in `pages/`, import it in `main.py` so its route registers, and add it to `NAV_LINKS` in `components.py`.
 
 ## Extending the app later
 
-- **Shared expenses:** add the ability to share an expense between users and track how much one user owes another based on who paid.
 - **Automatic backups:** call `db.create_backup()` from a `ui.timer` (or `app.on_startup`) and prune old files. Manual backups already exist on the Backups page.
 - **Budgets:** a `budgets(user_id, category_id, month, amount_cents)` table plus a progress bar per category on the overview page.
 - **Schema changes:** add steps to `db._migrate()` (it checks for missing columns before altering tables). For bigger changes, consider a `PRAGMA user_version` check or a migration tool such as Alembic.
