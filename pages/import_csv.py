@@ -214,7 +214,7 @@ def prepare_rows(
 @ui.page("/import")
 async def import_page() -> None:
     """Render the CSV import page."""
-    ctx = await components.build_layout("Import from CSV")
+    ctx = await components.build_layout("Import CSV")
     if ctx is None:
         return
     user_id = ctx.user["id"]

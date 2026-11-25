@@ -104,7 +104,7 @@ def _icon_button(icon: str, tooltip: str, on_click: Callable[[], None], enabled:
 @ui.page("/categories")
 async def categories_page() -> None:
     """Render the categories page."""
-    ctx = await components.build_layout("Categories")
+    ctx = await components.build_layout("Edit Categories")
     if ctx is None:
         return
     user_id = ctx.user["id"]

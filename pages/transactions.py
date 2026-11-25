@@ -145,7 +145,7 @@ class TransactionForm:
 @ui.page("/transactions")
 async def transactions_page() -> None:
     """Render the transactions page."""
-    ctx = await components.build_layout("Transactions")
+    ctx = await components.build_layout("Add Transactions")
     if ctx is None:
         return
     user_id = ctx.user["id"]
