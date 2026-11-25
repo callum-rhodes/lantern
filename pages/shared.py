@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from nicegui import ui
+import plotly.graph_objects as go
+from nicegui import app, ui
 
 import components
 import db
@@ -28,6 +29,10 @@ TABLE_COLUMNS = [
     {"name": "status", "label": "Your status", "field": "status", "align": "left"},
     {"name": "actions", "label": "", "field": "actions", "align": "right"},
 ]
+
+OWED_COLOR = "#21ba45"   # they owe you
+OWING_COLOR = "#c10015"  # you owe them
+SETTLED_COLOR = "#9e9e9e"
 
 PARTICIPANTS_SLOT = (
     '<q-td :props="props" style="white-space: pre-line">{{ props.value }}</q-td>'
@@ -61,6 +66,7 @@ async def shared_page() -> None:
 
     def refresh_all() -> None:
         balances_card.refresh()
+        balance_chart.refresh()
         activity.refresh()
 
     # ---- balances ----------------------------------------------------------------
@@ -121,6 +127,44 @@ async def shared_page() -> None:
                                   on_click=lambda _, b=balance: settle_dialog(b)).props("flat")
             ui.label("Balances include shares that are still waiting to be accepted.") \
                 .classes("text-caption text-grey-7")
+
+    @ui.refreshable
+    def balance_chart() -> None:
+        balances = db.shared_balances(user_id)
+        if not balances:
+            return
+        names = [b["name"] for b in balances]
+        values = [ctx.display.major(b["cents"]) for b in balances]
+        colours = [OWED_COLOR if b["cents"] > 0 else OWING_COLOR if b["cents"] < 0 else SETTLED_COLOR
+                   for b in balances]
+        fig = go.Figure(go.Bar(
+            x=values, y=names, orientation="h", marker_color=colours,
+            text=[money(b["cents"]) if b["cents"] < 0 else money(b["cents"], show_plus=True)
+                  for b in balances],
+            textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}: %{x:+,.2f}<extra></extra>",
+        ))
+        dark = bool(app.storage.user.get("dark_mode"))
+        fig.add_vline(x=0, line_width=1, line_color="#757575")
+        # Symmetric range so zero is always in the middle (padded so the labels fit).
+        limit = max((abs(v) for v in values), default=0) * 1.35 or 1.0
+        fig.update_layout(
+            template="plotly_dark" if dark else "plotly_white",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            height=max(180, 55 * len(balances) + 90),
+            margin={"l": 20, "r": 20, "t": 10, "b": 40},
+            xaxis_title=f"Balance ({ctx.display.code})",
+            yaxis={"autorange": "reversed"},  # same order as the Balances card
+            xaxis={"title": f"Balance ({ctx.display.code})",
+                   "range": [-limit, limit],
+                   "zeroline": False},
+            showlegend=False,
+        )
+        with ui.card().classes("w-full"):
+            ui.label("Balance chart").classes("text-h6")
+            ui.label("Green (+) means they owe you, red (−) means you owe them.") \
+                .classes("text-caption text-grey-7")
+            ui.plotly(fig).classes("w-full")
 
     # ---- activity ----------------------------------------------------------------
     def _people_text(item: dict[str, Any]) -> str:
@@ -254,4 +298,5 @@ async def shared_page() -> None:
     with components.content():
         ui.label("Shared Transactions").classes("text-h5")
         balances_card()
+        balance_chart()
         activity()

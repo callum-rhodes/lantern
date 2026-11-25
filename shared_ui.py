@@ -73,6 +73,22 @@ class SplitModel:
         self.values[col][user_id] = value
         self.auto[col] = False
 
+    def rebalance(self, col: str, user_id: int, value: float) -> None:
+        """Set one person's value and scale the others proportionally so the column still adds up."""
+        unit_total = 10000 if self.mode[col] == PCT else self.total_cents  # hundredths
+        if unit_total <= 0:
+            return
+        mine = min(max(round(value * 100), 0), unit_total)
+        others = [u for u in self.people if u != user_id]
+        new = {user_id: mine}
+        if others:
+            current = [max(self._cell_cents(self.values[col].get(u)), 0) for u in others]
+            weights = current if sum(current) > 0 else [1] * len(others)
+            for u, units in zip(others, splits.shares(unit_total - mine, weights)):
+                new[u] = units
+        self.values[col] = {u: new[u] / 100 for u in self.people}
+        self.auto[col] = False
+
     def refill(self, col: str) -> None:
         """Even split (Owes) or creator paid all (Paid), in the column's current mode."""
         n, total = len(self.people), self.total_cents
@@ -190,6 +206,8 @@ class _SplitDialog:
         total = prefill.get("total")
         self.model = SplitModel(self.me, rates.amount_to_cents(total) if total else 0)
         self.remaining_labels: dict[str, ui.label] = {}
+        self.boxes: dict[tuple[str, int], ui.number] = {}
+        self.sliders: dict[tuple[str, int], ui.slider] = {}
 
     def open(self) -> None:
         dialog = components.new_dialog()
@@ -217,7 +235,9 @@ class _SplitDialog:
                     with ui.column().classes("w-56 gap-1"):
                         ui.label(TITLES[col]).classes("text-subtitle1 text-bold")
                         ui.toggle({VALUE: self.symbol, PCT: "%"}, value=self.model.mode[col],
-                                  on_change=lambda e, c=col: self._mode_changed(c, e.value)).props("dense")
+                                on_change=lambda e, c=col: self._mode_changed(c, e.value)) \
+                            .props("spread no-caps unelevated toggle-color=primary color=grey-4 text-color=grey-9") \
+                            .classes("w-full")
                         if col == OWED:
                             ui.button("Split evenly", on_click=lambda: self._helper(OWED)) \
                                 .props("flat dense no-caps")
@@ -227,6 +247,8 @@ class _SplitDialog:
 
             @ui.refreshable
             def rows() -> None:
+                self.boxes.clear()
+                self.sliders.clear()
                 for uid in self.model.people:
                     with ui.row().classes("items-center gap-4"):
                         ui.label(self.names.get(uid, "?")).classes("w-36")
@@ -249,13 +271,24 @@ class _SplitDialog:
         dialog.open()
 
     # ---- widgets --------------------------------------------------------------
+    def _top(self, col: str) -> float:
+        return 100 if self.model.mode[col] == PCT else max(self.model.total_cents / 100, 0.01)
+
     def _number(self, col: str, uid: int) -> None:
         pct = self.model.mode[col] == PCT
-        ui.number(
-            value=self.model.values[col].get(uid), step=0.01, format="%.2f", min=0,
-            prefix=None if pct else self.symbol, suffix="%" if pct else None,
-            on_change=lambda e, c=col, u=uid: self._edited(c, u, e.value),
-        ).props("dense outlined").classes("w-56")
+        top = self._top(col)
+        with ui.column().classes("w-56 gap-0"):
+            box = ui.number(
+                value=self.model.values[col].get(uid), step=0.01, format="%.2f", min=0,
+                prefix=None if pct else self.symbol, suffix="%" if pct else None,
+                on_change=lambda e, c=col, u=uid: self._edited(c, u, e.value),
+            ).props("dense outlined debounce=400").classes("w-full")
+            slider = ui.slider(
+                min=0, max=top, step=0.01, value=min(self.model.values[col].get(uid) or 0, top),
+                on_change=lambda e, c=col, u=uid: self._slid(c, u, e.value),
+            ).props("label dense").classes("w-full")
+        self.boxes[(col, uid)] = box
+        self.sliders[(col, uid)] = slider
 
     def _update_status(self) -> None:
         for col in COLUMNS:
@@ -272,11 +305,39 @@ class _SplitDialog:
         self.save_button.set_enabled(problem is None)
 
     # ---- events ---------------------------------------------------------------
+    def _apply(self, col: str, uid: int, value: float) -> None:
+        """Set one person's value. With exactly two people the other person gets the remainder."""
+        value = round(value, 2)
+        top = self._top(col)
+        if len(self.model.people) == 2:
+            self.model.rebalance(col, uid, value)
+            touched = self.model.people
+        else:
+            self.model.set_value(col, uid, value)
+            touched = [uid]
+        for u in touched:
+            v = self.model.values[col][u]
+            if self.boxes[(col, u)].value != v:
+                self.boxes[(col, u)].value = v
+            if self.sliders[(col, u)].value != min(v, top):
+                self.sliders[(col, u)].value = min(v, top)
+        self._update_status()
+
+    def _slid(self, col: str, uid: int, value: float | None) -> None:
+        current = self.model.values[col].get(uid) or 0
+        if value is None or abs(value - current) < 0.001:
+            return  # programmatic update, not a drag
+        self._apply(col, uid, value)
+
     def _edited(self, col: str, uid: int, value: float | None) -> None:
         if value == self.model.values[col].get(uid):
-            return  # a rebuild or programmatic set, not the user typing
-        self.model.set_value(col, uid, value)
-        self._update_status()
+            return  # programmatic update, not typing
+        if value is None or value < 0:
+            # Cleared or invalid box: record it as typed and let the status line flag it.
+            self.model.set_value(col, uid, value)
+            self._update_status()
+            return
+        self._apply(col, uid, value)
 
     def _total_changed(self, event: Any) -> None:
         try:
