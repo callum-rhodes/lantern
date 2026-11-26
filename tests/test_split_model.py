@@ -1,13 +1,13 @@
-"""Tests for the arithmetic behind the split dialog (``shared_ui.SplitModel``).
+"""Tests for the arithmetic behind the split dialog (``web_app.shared_ui.SplitModel``).
 
-Run from the project folder:   python test_split_model.py
-No database is touched.
+Run from anywhere in the project:   pytest
+No database is touched (the autouse database fixture in conftest.py is harmless here).
 """
 from __future__ import annotations
 
 from decimal import Decimal
 
-from shared_ui import OWED, PAID, PCT, VALUE, SplitModel
+from web_app.shared_ui import OWED, PAID, PCT, VALUE, SplitModel
 
 A, B, C = 1, 2, 3
 
@@ -106,7 +106,7 @@ def test_incomplete_values_convert_without_hiding_the_gap() -> None:
     m.set_value(OWED, A, 30.0)
     m.set_value(OWED, B, None)
     m.set_mode(OWED, PCT)
-    assert m.values[OWED] == {A: 30.0, B: 0.0} or m.values[OWED] == {A: 30.0, B: 0.0}
+    assert m.values[OWED] == {A: 30.0, B: 0.0}
     assert m.remaining(OWED) == (Decimal("70.00"), False)
 
 
@@ -143,17 +143,3 @@ def test_bad_numbers_are_invalid_not_crashes() -> None:
     m.set_value(OWED, A, 90.0)
     m.set_value(OWED, B, 20.0)                   # 110%
     assert m.cents(OWED) is None and m.remaining(OWED) == (Decimal("-10.0"), False)
-
-
-if __name__ == "__main__":
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    failed = 0
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"PASS  {name}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            print(f"FAIL  {name}: {type(exc).__name__}: {exc}")
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    raise SystemExit(1 if failed else 0)

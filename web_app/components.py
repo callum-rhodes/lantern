@@ -16,21 +16,20 @@ from typing import Any
 
 from nicegui import app, ui
 
-from db import DataError, users, settings, transactions
-import rates
-import state
+from db import DataError, users, settings, transactions, rates
+from web_app import state
 
 APP_TITLE = "Lantern"
-NAV_LINKS_MAIN: list[tuple[str, str]] = [
-    ("Overview", "/"),
-    ("Add Transactions", "/transactions"),
-    ("Shared Balances", "/shared"),
+NAV_LINKS_MAIN: list[tuple[str, str, str]] = [
+    ("Overview", "/", "bar_chart"),
+    ("Add Transactions", "/transactions", "add"),
+    ("Shared Balances", "/shared", "group"),
 ]
-NAV_LINKS_OTHER: list[tuple[str, str]] = [
-    ("Edit Categories", "/categories"),
-    ("Export CSV", "/export"),
-    ("Import CSV", "/import"),
-    ("Backups", "/backups"),
+NAV_LINKS_OTHER: list[tuple[str, str, str]] = [
+    ("Edit Categories", "/categories", ""),
+    ("Export CSV", "/export", ""),
+    ("Import CSV", "/import", ""),
+    ("Backups", "/backups", ""),
 ]
 
 @dataclass(frozen=True)
@@ -287,16 +286,19 @@ def _build_header(ctx: PageContext, active: str) -> None:
         with ui.row().classes("items-center gap-6"):
             ui.label(APP_TITLE).classes("text-h4 text-bold")
             with ui.button_group():
-                for label, path in NAV_LINKS_MAIN:
+                for label, path, icon in NAV_LINKS_MAIN:
+                    # NORMAL TEXT LINKS
                     # link = ui.link(label, path).classes("text-white no-underline")
                     # if label == active:
                     #     link.classes("font-bold underline")
-                    ui.button(label, on_click=lambda p=path: ui.navigate.to(p)).classes(
+
+                    # UNDERLINE BUTTONS
+                    ui.button(label, on_click=lambda p=path: ui.navigate.to(p), icon=icon).classes(
                         "text-white no-underline" + (" font-bold underline" if label == active else "")
                     )
 
-                with ui.dropdown_button('Other functions', icon='settings', split=False).classes("text-white"):
-                    for label, path in NAV_LINKS_OTHER:
+                with ui.dropdown_button('Other functions', icon='extension', split=False).classes("text-white"):
+                    for label, path, icon in NAV_LINKS_OTHER:
                         ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes("text-white no-underline")
 
         with ui.row().classes("items-center gap-2"):

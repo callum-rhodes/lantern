@@ -27,16 +27,16 @@ os.environ.setdefault("NICEGUI_STORAGE_PATH", str(Path(__file__).resolve().paren
 from nicegui import ui  # noqa: E402
 
 from db import DataError, settings, users, schema, demo, core
-from components import APP_TITLE  # noqa: E402
+from web_app.components import APP_TITLE  # noqa: E402
 
 # Importing the page modules registers their routes (they use @ui.page).
-import pages.categories  # noqa: E402,F401
-import pages.overview  # noqa: E402,F401
-import pages.transactions  # noqa: E402,F401
-import pages.export  # noqa: E402,F401
-import pages.import_csv  # noqa: E402,F401
-import pages.backups  # noqa: E402,F401
-import pages.shared  # noqa: E402,F401
+from web_app.pages import categories  # noqa: E402,F401
+from web_app.pages import overview  # noqa: E402,F401
+from web_app.pages import transactions  # noqa: E402,F401
+from web_app.pages import export  # noqa: E402,F401
+from web_app.pages import import_csv  # noqa: E402,F401
+from web_app.pages import backups  # noqa: E402,F401
+from web_app.pages import shared  # noqa: E402,F401
 
 log = logging.getLogger("finance_tracker")
 

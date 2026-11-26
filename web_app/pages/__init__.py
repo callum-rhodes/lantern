@@ -1,0 +1,1 @@
+"""One module per route; importing a module registers its page."""

@@ -17,9 +17,8 @@ from typing import Any
 import plotly.graph_objects as go
 from nicegui import app, ui
 
-import components
-from db import DataError, shared_transactions
-import rates
+from web_app import components
+from db import DataError, shared_transactions, rates
 
 TABLE_COLUMNS = [
     {"name": "date", "label": "Date", "field": "date", "align": "left"},

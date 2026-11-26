@@ -11,7 +11,7 @@ from typing import Any
 
 from nicegui import ui
 
-import components
+from web_app import components
 from db import DataError, categories
 
 

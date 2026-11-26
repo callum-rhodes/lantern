@@ -13,8 +13,7 @@ import hmac, time
 
 from nicegui import app
 
-from db import DataError, users
-import rates
+from db import DataError, users, rates
 
 # --------------------------------------------------------------------------
 # Active user

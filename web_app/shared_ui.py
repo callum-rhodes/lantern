@@ -16,10 +16,8 @@ from typing import Any
 
 from nicegui import ui
 
-import components
-from db import DataError, users, shared_transactions, categories
-import rates
-import splits
+from web_app import components
+from db import DataError, users, shared_transactions, categories, rates
 
 PAID, OWED = "paid", "owed"
 VALUE, PCT = "value", "pct"
@@ -84,7 +82,7 @@ class SplitModel:
         if others:
             current = [max(self._cell_cents(self.values[col].get(u)), 0) for u in others]
             weights = current if sum(current) > 0 else [1] * len(others)
-            for u, units in zip(others, splits.shares(unit_total - mine, weights)):
+            for u, units in zip(others, shared_transactions.shares(unit_total - mine, weights)):
                 new[u] = units
         self.values[col] = {u: new[u] / 100 for u in self.people}
         self.auto[col] = False
@@ -93,8 +91,8 @@ class SplitModel:
         """Even split (Owes) or creator paid all (Paid), in the column's current mode."""
         n, total = len(self.people), self.total_cents
         if col == OWED:
-            pcts = [c / 100 for c in splits.shares(10000, [1] * n)]
-            cents = splits.shares(total, [1] * n) if total > 0 else None
+            pcts = [c / 100 for c in shared_transactions.shares(10000, [1] * n)]
+            cents = shared_transactions.shares(total, [1] * n) if total > 0 else None
         else:
             pcts = [100.0] + [0.0] * (n - 1)
             cents = [total] + [0] * (n - 1) if total > 0 else None
@@ -120,15 +118,15 @@ class SplitModel:
         elif mode == PCT:  # currency -> percent
             cents = [self._cell_cents(old.get(u)) for u in self.people]
             if sum(cents) == total and min(cents) >= 0:
-                new = [s / 100 for s in splits.shares(10000, cents)]  # adds up to exactly 100
+                new = [s / 100 for s in shared_transactions.shares(10000, cents)]  # adds up to exactly 100
             else:
                 new = [float((Decimal(c) * 100 / total).quantize(Decimal("0.01"), ROUND_HALF_UP))
                        for c in cents]
         else:              # percent -> currency
             pcts = [Decimal(str(old.get(u) or 0)) for u in self.people]
             try:
-                cents = splits.percents_to_cents(total, pcts)
-            except splits.SplitError:
+                cents = shared_transactions.percents_to_cents(total, pcts)
+            except shared_transactions.SplitError:
                 cents = [int((p * total / 100).quantize(Decimal(1), ROUND_HALF_UP)) for p in pcts]
             new = [c / 100 for c in cents]
         self.values[col] = dict(zip(self.people, new))
@@ -151,8 +149,8 @@ class SplitModel:
             result = [self._cell_cents(v) for v in cells]
             return None if min(result) < 0 else result
         try:
-            return splits.percents_to_cents(self.total_cents, [Decimal(str(v or 0)) for v in cells])
-        except splits.SplitError:
+            return shared_transactions.percents_to_cents(self.total_cents, [Decimal(str(v or 0)) for v in cells])
+        except shared_transactions.SplitError:
             return None
 
     def remaining(self, col: str) -> tuple[Decimal, bool]:

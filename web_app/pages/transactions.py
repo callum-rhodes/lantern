@@ -11,10 +11,8 @@ from typing import Any
 
 from nicegui import ui
 
-import components
-from db import DataError, transactions, categories, recurring, users
-import rates
-import shared_ui
+from web_app import components, shared_ui
+from db import DataError, transactions, categories, recurring, users, rates
 
 # Quasar templates for the table. They only add the colour and the buttons;
 # the buttons send "edit"/"delete" events that are handled in Python below.

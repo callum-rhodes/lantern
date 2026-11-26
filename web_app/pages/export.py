@@ -12,9 +12,8 @@ from datetime import date
 
 from nicegui import ui
 
-import components
-from db import DataError, transactions, reports, categories
-import rates
+from web_app import components
+from db import DataError, transactions, reports, categories, rates
 
 
 def _money(cents: int, rate: float) -> str:

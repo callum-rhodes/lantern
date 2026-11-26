@@ -1,6 +1,6 @@
 """Overview page: summaries, charts and a month x category table.
 
-All aggregation is done in SQL (see the aggregation functions in ``db.py``) in
+All aggregation is done in SQL (see the aggregation functions in ``db/reports.py``) in
 base-currency minor units; values are converted to the display currency only
 when they are put into cards, charts and the table.
 """
@@ -13,9 +13,8 @@ from typing import Any
 import plotly.graph_objects as go
 from nicegui import app, ui
 
-import components
+from web_app import components, state
 from db import reports, categories
-import state
 
 INCOME_COLOR = "#21ba45"
 EXPENSE_COLOR = "#c10015"

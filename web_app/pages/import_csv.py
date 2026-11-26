@@ -22,9 +22,8 @@ from typing import Any
 
 from nicegui import ui
 
-import components
-from db import DataError, transactions, categories
-import rates
+from web_app import components
+from db import DataError, transactions, categories, rates
 
 DATE_FORMATS = {
     "%Y-%m-%d": "2026-03-31",

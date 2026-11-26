@@ -3,6 +3,9 @@ finance.db
 finance.db-*
 backups/
 .nicegui/
+tests/
+pytest.ini
+dev-requirements.txt
 
 # Python / tooling
 __pycache__/

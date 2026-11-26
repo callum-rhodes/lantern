@@ -1,7 +1,7 @@
 """Exchange rates and money helpers.
 
 * Rates come from the free Frankfurter API and are cached in SQLite
-  (``db.save_rates`` / ``db.load_rates``); the cache is refreshed when older
+  (``save_rates`` / ``load_rates`` below); the cache is refreshed when older
   than 24 hours.
 * If the network fails, cached rates are used and a warning is returned.
   With no cache at all, only the base currency is available.
@@ -20,7 +20,8 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import httpx
 
-from db import DataError, rate_cache, settings
+from db import settings
+from db.core import DataError, connect
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,33 @@ class RateStatus:
         """Currency codes that can be selected, base currency first."""
         others = sorted(code for code in self.rates if code != self.base)
         return [self.base, *others]
+
+
+# --------------------------------------------------------------------------
+# Cache table
+# --------------------------------------------------------------------------
+
+def save_rates(base: str, rates: dict[str, float], fetched_at: str | None = None) -> str:
+    """Replace the cached rates for ``base``; return the fetch timestamp (UTC ISO)."""
+    stamp = fetched_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with connect() as conn:
+        conn.execute("DELETE FROM exchange_rates WHERE base = ?", (base,))
+        conn.executemany(
+            "INSERT INTO exchange_rates(base, target, rate, fetched_at) VALUES (?, ?, ?, ?)",
+            [(base, code, float(rate), stamp) for code, rate in rates.items()],
+        )
+    return stamp
+
+
+def load_rates(base: str) -> tuple[dict[str, float], str | None]:
+    """Return ``(rates, fetched_at)`` from the cache; ``({}, None)`` if empty."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT target, rate, fetched_at FROM exchange_rates WHERE base = ?", (base,)
+        ).fetchall()
+    if not rows:
+        return {}, None
+    return {r["target"]: r["rate"] for r in rows}, max(r["fetched_at"] for r in rows)
 
 
 # --------------------------------------------------------------------------
@@ -111,7 +139,7 @@ def ensure_rates(base: str | None = None, force: bool = False) -> RateStatus:
     global _last_failed_attempt
     base = (base or settings.get_base_currency()).upper()
     with _lock:
-        cached, fetched_at = rate_cache.load_rates(base)
+        cached, fetched_at = load_rates(base)
         warning: str | None = None
 
         recently_failed = (
@@ -122,7 +150,7 @@ def ensure_rates(base: str | None = None, force: bool = False) -> RateStatus:
             try:
                 fresh = _fetch_remote(base)
                 try:
-                    fetched_at = rate_cache.save_rates(base, fresh)
+                    fetched_at = save_rates(base, fresh)
                 except DataError:
                     log.warning("Could not cache exchange rates", exc_info=True)
                     fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
