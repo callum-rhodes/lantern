@@ -12,7 +12,13 @@ LANtern is a small, self-hosted personal finance tracker for your home network. 
 - Import a bank CSV, export your data, and back up or restore the database
 - View amounts in any currency (exchange rates from [Frankfurter](https://www.frankfurter.app))
 
-<img src="docs/overview.png" width="700" alt="Lantern's Overview page">
+<table>
+  <tr valign="top">
+    <td><img src="docs/lantern_overview.png" alt="First image" width="300"></td>
+    <td><img src="docs/lantern_graphs.png" alt="Second image" width="300"></td>
+    <td><img src="docs/lantern_transactions.png" alt="Third image" width="300"></td>
+  </tr>
+</table>
 
 ## Run with Docker
 
