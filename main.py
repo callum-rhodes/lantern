@@ -2,14 +2,14 @@
 
 Run with ``python main.py``. Options:
 
-    --port N        port to listen on (default: $FINANCE_PORT or 8080)
+    --port N        port to listen on (default: $LANTERN_PORT or 8080)
     --seed-demo     create a "Demo" user with a few years of random transactions
 
 Environment variables:
 
-    FINANCE_PORT            default port
-    FINANCE_DB_PATH         path of the SQLite file (default: finance.db next to this file)
-    FINANCE_STORAGE_SECRET  secret for per-browser storage (default: generated once and
+    LANTERN_PORT            default port
+    LANTERN_DB_PATH         path of the SQLite file (default: lantern.db next to this file)
+    LANTERN_STORAGE_SECRET  secret for per-browser storage (default: generated once and
                             kept in the database)
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ from web_app.pages import import_csv  # noqa: E402,F401
 from web_app.pages import backups  # noqa: E402,F401
 from web_app.pages import shared  # noqa: E402,F401
 
-log = logging.getLogger("finance_tracker")
+log = logging.getLogger("lantern")
 
 DEFAULT_PORT = 8080
 HOST = "0.0.0.0"  # listen on all interfaces so other devices on the network can connect
@@ -48,10 +48,10 @@ HOST = "0.0.0.0"  # listen on all interfaces so other devices on the network can
 def get_storage_secret() -> str:
     """Secret used to sign the per-browser storage cookie.
 
-    Taken from FINANCE_STORAGE_SECRET if set; otherwise a random value is
+    Taken from LANTERN_STORAGE_SECRET if set; otherwise a random value is
     generated once and kept in the settings table so it survives restarts.
     """
-    env_secret = os.environ.get("FINANCE_STORAGE_SECRET")
+    env_secret = os.environ.get("LANTERN_STORAGE_SECRET")
     if env_secret:
         return env_secret
     stored = settings.get_setting("storage_secret")
@@ -94,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     """Read command-line options."""
     parser = argparse.ArgumentParser(description=APP_TITLE)
     parser.add_argument(
-        "--port", type=int, default=int(os.environ.get("FINANCE_PORT", DEFAULT_PORT)),
+        "--port", type=int, default=int(os.environ.get("LANTERN_PORT", DEFAULT_PORT)),
         help="port to listen on (default: %(default)s)",
     )
     parser.add_argument(

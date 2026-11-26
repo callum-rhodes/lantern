@@ -1,7 +1,7 @@
 """Tests for shared transactions (db layer + split maths).
 
 Run from anywhere in the project:   pytest
-Each test gets its own throw-away database (see conftest.py), so finance.db is never touched.
+Each test gets its own throw-away database (see conftest.py), so lantern.db is never touched.
 """
 from __future__ import annotations
 

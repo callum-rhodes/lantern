@@ -31,11 +31,11 @@ docker compose up -d --build
 
 Then open `http://<server-address>:8080`.
 
-- Your data lives in the `finance-data` volume, so rebuilding never touches it.
+- Your data lives in the `lantern-data` volume, so rebuilding never touches it.
 - Set your time zone with `TZ`, e.g. `TZ=Europe/Paris docker compose up -d` (default `Europe/London`).
-- Logs: `docker compose logs -f lantern-finance-tracker`
+- Logs: `docker compose logs -f lantern`
 - Stop: `docker compose down` (add `-v` to also delete your data)
-- Forgot a password: `docker compose exec lantern-finance-tracker python main.py --reset-password NAME`
+- Forgot a password: `docker compose exec lantern python main.py --reset-password NAME`
 
 ## Run with Python
 
@@ -79,11 +79,11 @@ To use it from another device, open `http://<host-address>:8080`. If it doesn't 
 
 | Setting | How | Default |
 | --- | --- | --- |
-| Port | `--port 9000` or `FINANCE_PORT` | `8080` |
-| Database file | `FINANCE_DB_PATH` | `finance.db` (`/data/finance.db` in Docker) |
-| Backup folder | `FINANCE_BACKUP_DIR` | `backups/` (`/data/backups` in Docker) |
+| Port | `--port 9000` or `LANTERN_PORT` | `8080` |
+| Database file | `LANTERN_DB_PATH` | `lantern.db` (`/data/lantern.db` in Docker) |
+| Backup folder | `LANTERN_BACKUP_DIR` | `backups/` (`/data/backups` in Docker) |
 | Browser storage folder | `NICEGUI_STORAGE_PATH` | `.nicegui` (`/data/.nicegui` in Docker) |
-| Storage secret | `FINANCE_STORAGE_SECRET` | generated and kept in the database |
+| Storage secret | `LANTERN_STORAGE_SECRET` | generated and kept in the database |
 
 To reset a password without Docker: `python main.py --reset-password NAME`.
 

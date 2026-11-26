@@ -30,10 +30,10 @@ RUN pip install -r requirements.txt
 COPY --chown=app:app . .
 
 # Keep everything the app writes inside /data.
-ENV FINANCE_DB_PATH=/data/finance.db \
-    FINANCE_BACKUP_DIR=/data/backups \
+ENV LANTERN_DB_PATH=/data/lantern.db \
+    LANTERN_BACKUP_DIR=/data/backups \
     NICEGUI_STORAGE_PATH=/data/.nicegui \
-    FINANCE_PORT=8080
+    LANTERN_PORT=8080
 
 USER app
 VOLUME /data
@@ -42,6 +42,6 @@ EXPOSE 8080
 # Only checks that the server is accepting connections (the pages themselves
 # may call the exchange-rate API, so they make a poor health probe).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('FINANCE_PORT', '8080'))), 3).close()"
+    CMD python -c "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ.get('LANTERN_PORT', '8080'))), 3).close()"
 
 CMD ["python", "main.py"]

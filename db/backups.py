@@ -27,8 +27,8 @@ _BACKUP_NAME = re.compile(r"^[\w][\w .\-]*\.db$")
 
 
 def get_backup_dir() -> Path:
-    """Folder holding backups (``FINANCE_BACKUP_DIR`` overrides ``backups/`` next to main.py)."""
-    path = Path(os.environ.get("FINANCE_BACKUP_DIR", DEFAULT_BACKUP_DIR))
+    """Folder holding backups (``LANTERN_BACKUP_DIR`` overrides ``backups/`` next to main.py)."""
+    path = Path(os.environ.get("LANTERN_BACKUP_DIR", DEFAULT_BACKUP_DIR))
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -50,7 +50,7 @@ def _copy_database(source: Path, dest: Path) -> None:
             src.close()
 
 
-def create_backup(prefix: str = "finance") -> str:
+def create_backup(prefix: str = "lantern") -> str:
     """Save the live database as ``<prefix>-YYYYMMDD-HHMMSS.db``; return the file name."""
     folder = get_backup_dir()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -73,7 +73,7 @@ def resolve_backup(name: str) -> Path:
 
 
 def check_backup_file(path: Path) -> dict[str, int]:
-    """Make sure ``path`` is a healthy finance database; return its user/transaction counts."""
+    """Make sure ``path`` is a healthy lantern database; return its user/transaction counts."""
     try:
         conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
     except sqlite3.Error as exc:

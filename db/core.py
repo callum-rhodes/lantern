@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 # This file lives in db/, so the default database sits one level up, next to main.py.
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = PROJECT_DIR / "finance.db"
+DEFAULT_DB_PATH = PROJECT_DIR / "lantern.db"
 
 
 class DataError(Exception):
@@ -32,8 +32,8 @@ class DataError(Exception):
 
 
 def get_db_path() -> Path:
-    """Return the database file path (``FINANCE_DB_PATH`` overrides the default)."""
-    return Path(os.environ.get("FINANCE_DB_PATH", DEFAULT_DB_PATH))
+    """Return the database file path (``LANTERN_DB_PATH`` overrides the default)."""
+    return Path(os.environ.get("LANTERN_DB_PATH", DEFAULT_DB_PATH))
 
 
 @contextmanager

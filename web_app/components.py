@@ -366,39 +366,6 @@ def _build_header(ctx: PageContext, active: str) -> None:
                     ui.separator()
                     ui.menu_item("Log out", on_click=_log_out)
 
-    # OLD HEADER ------------------------------------------------------------------------------------------------------------
-    # with ui.header().classes("items-center justify-between gap-4"):
-    #     with ui.row().classes("items-center gap-6"):
-    #         ui.label(APP_TITLE).classes("text-h4 text-bold")
-    #         with ui.button_group():
-    #             for label, path, icon in NAV_LINKS_MAIN:
-    #                 # UNDERLINE BUTTONS
-    #                 ui.button(label, on_click=lambda p=path: ui.navigate.to(p), icon=icon).classes(
-    #                     "text-white no-underline" + (" font-bold text-amber-5" if label == active else "")
-    #                 )
-
-    #         with ui.dropdown_button('Other functions', icon='extension', split=False).classes(
-    #             "text-white" + (" font-bold text-amber-5" if any(label == active for label, _, _ in NAV_LINKS_OTHER) else "")):
-    #             item_text = 'text-white no-underline' if is_dark else 'text-black no-underline' 
-    #             for label, path, icon in NAV_LINKS_OTHER:
-    #                 ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes(item_text)
-
-    #     with ui.row().classes("items-center gap-2"):
-    #         ui.label(ctx.user["name"]).classes("text-body1")
-    #         ui.button(icon="person_add", on_click=add_user_dialog.open) \
-    #             .props("flat round dense color=white").tooltip("Add user")
-    #         ui.button(icon="key", on_click=password_dialog.open) \
-    #             .props("flat round dense color=white").tooltip("Change password")
-    #         ui.button(icon="person_remove", on_click=delete_user_dialog.open) \
-    #             .props("flat round dense color=white").tooltip("Delete my account")
-    #         ui.button(icon="logout", on_click=_log_out) \
-    #             .props("flat round dense color=white").tooltip("Log out")
-    #         ui.select(ctx.status.currencies, value=ctx.display.code, on_change=_switch_currency) \
-    #             .props(select_props).classes("w-24").tooltip("Display currency")
-    #         ui.button(icon="dark_mode", on_click=_toggle_dark) \
-    #             .props("flat round dense color=white").tooltip("Toggle dark mode")
-
-
 # --------------------------------------------------------------------------
 # First-run setup
 # --------------------------------------------------------------------------

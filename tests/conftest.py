@@ -1,7 +1,7 @@
 """Shared pytest setup: every test gets its own throw-away database.
 
-``FINANCE_DB_PATH`` is pointed at a temporary file before each test, so your real
-``finance.db`` is never touched and no test can see another test's data.
+``LANTERN_DB_PATH`` is pointed at a temporary file before each test, so your real
+``lantern.db`` is never touched and no test can see another test's data.
 """
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ os.environ.setdefault("NICEGUI_STORAGE_PATH", tempfile.mkdtemp(prefix="lantern-n
 def database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A fresh, empty database (schema created) for every test."""
     path = tmp_path / "test.db"
-    monkeypatch.setenv("FINANCE_DB_PATH", str(path))
-    monkeypatch.setenv("FINANCE_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("LANTERN_DB_PATH", str(path))
+    monkeypatch.setenv("LANTERN_BACKUP_DIR", str(tmp_path / "backups"))
     schema.init_db()
     return path
 

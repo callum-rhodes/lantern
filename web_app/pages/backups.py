@@ -1,7 +1,7 @@
 """Backups page: save the database to a timestamped file, download, restore or delete backups.
 
-Save as ``pages/backups.py``. All file handling lives in ``db/backups.py`` (see the
-Backups section there); this page only provides the buttons and dialogs.
+All file handling lives in ``db/backups.py`` (see the Backups section there);
+this page only provides the buttons and dialogs.
 
 Restoring replaces ALL data for ALL users, so it always asks first and saves a
 "pre-restore" copy of the current data before overwriting it.

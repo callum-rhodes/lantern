@@ -153,8 +153,6 @@ def _add_average_line(fig, labels, display, cents, name, colour, factor=1) -> No
         mode="lines", line={"color": colour, "dash": "dash"}, hovertemplate=HOVER,
     )
 
-AVG_EXPENSE_COLOR = "#ff9800"
-
 def _monthly_figure(pivot, periods, display, averages=None, kind="expense", all_years=False) -> go.Figure:
     keys, labels = periods
     fig = go.Figure()
