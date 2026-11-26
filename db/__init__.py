@@ -14,7 +14,7 @@ transactions        transactions and CSV-import helpers
 recurring           recurring rules and pending items
 shared_transactions shared transactions, balances, settlements
 reports             overview-page aggregations
-rate_cache          exchange-rate cache table
+rates               exchange-rate cache table
 backups             backup files and restore
 demo                demo data
 """

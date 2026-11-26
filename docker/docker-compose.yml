@@ -1,6 +1,8 @@
 services:
-  finance-tracker:
-    build: .
+  lantern-finance-tracker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: lantern
     restart: unless-stopped
     ports:
@@ -12,7 +14,7 @@ services:
     environment:
       TZ: ${TZ:-Europe/London}
       # FINANCE_STORAGE_SECRET: change-me   # optional; otherwise generated and kept in the database
-      # Forgot a password? Run: docker compose exec finance-tracker python main.py --reset-password NAME
+      # Forgot a password? Run: docker compose exec lantern-finance-tracker python main.py --reset-password NAME
     volumes:
       - finance-data:/data
 

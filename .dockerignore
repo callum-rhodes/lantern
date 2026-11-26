@@ -1,15 +1,22 @@
 # Local data: never bake these into the image
-finance.db
-finance.db-*
+*.db
+*.db-*
 backups/
 .nicegui/
+data/
+*.csv
+.env
+
+# Tests and packaging metadata (not needed at runtime)
 tests/
-pytest.ini
-dev-requirements.txt
+pyproject.toml
+**/*.egg-info/
+build/
+dist/
 
 # Python / tooling
-__pycache__/
-*.py[cod]
+**/__pycache__/
+**/*.py[cod]
 .venv/
 venv/
 env/
@@ -24,9 +31,7 @@ env/
 .vscode/
 
 # Docker files themselves
-Dockerfile
-docker-compose.yml
-.dockerignore
+docker/
 
 # Screenshots used by the README
 docs/
