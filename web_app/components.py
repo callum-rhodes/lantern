@@ -276,7 +276,8 @@ def _toggle_dark(_: Any = None) -> None:
 
 def _build_header(ctx: PageContext, active: str) -> None:
     """Title, navigation, user picker, currency selector and dark-mode toggle."""
-    ui.dark_mode(value=bool(app.storage.user.get("dark_mode")))
+    is_dark = bool(app.storage.user.get("dark_mode"))
+    ui.dark_mode(value=is_dark)
     add_user_dialog = _build_add_user_dialog()
     password_dialog = _build_change_password_dialog(ctx.user["id"])
     delete_user_dialog = _build_delete_user_dialog(ctx.user)
@@ -287,19 +288,15 @@ def _build_header(ctx: PageContext, active: str) -> None:
             ui.label(APP_TITLE).classes("text-h4 text-bold")
             with ui.button_group():
                 for label, path, icon in NAV_LINKS_MAIN:
-                    # NORMAL TEXT LINKS
-                    # link = ui.link(label, path).classes("text-white no-underline")
-                    # if label == active:
-                    #     link.classes("font-bold underline")
-
                     # UNDERLINE BUTTONS
                     ui.button(label, on_click=lambda p=path: ui.navigate.to(p), icon=icon).classes(
                         "text-white no-underline" + (" font-bold underline" if label == active else "")
                     )
 
                 with ui.dropdown_button('Other functions', icon='extension', split=False).classes("text-white"):
+                    item_text = 'text-white no-underline' if is_dark else 'text-black no-underline' 
                     for label, path, icon in NAV_LINKS_OTHER:
-                        ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes("text-white no-underline")
+                        ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes(item_text)
 
         with ui.row().classes("items-center gap-2"):
             ui.label(ctx.user["name"]).classes("text-body1")
