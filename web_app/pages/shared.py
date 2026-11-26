@@ -29,9 +29,9 @@ TABLE_COLUMNS = [
     {"name": "actions", "label": "", "field": "actions", "align": "right"},
 ]
 
-OWED_COLOR = "#21ba45"   # they owe you
-OWING_COLOR = "#c10015"  # you owe them
-SETTLED_COLOR = "#9e9e9e"
+OWED_COLOR = "#2e9e6b"   # they owe you
+OWING_COLOR = "#d1493f"  # you owe them
+SETTLED_COLOR = "#f2a93b"
 
 PARTICIPANTS_SLOT = (
     '<q-td :props="props" style="white-space: pre-line">{{ props.value }}</q-td>'
@@ -143,7 +143,7 @@ async def shared_page() -> None:
             textposition="outside", cliponaxis=False,
             hovertemplate="%{y}: %{x:+,.2f}<extra></extra>",
         ))
-        dark = bool(app.storage.user.get("dark_mode"))
+        dark = bool(app.storage.user.get("dark_mode", True))
         fig.add_vline(x=0, line_width=1, line_color="#757575")
         # Symmetric range so zero is always in the middle (padded so the labels fit).
         limit = max((abs(v) for v in values), default=0) * 1.35 or 1.0

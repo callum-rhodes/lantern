@@ -16,9 +16,10 @@ from nicegui import app, ui
 from web_app import components, state
 from db import reports, categories
 
-INCOME_COLOR = "#21ba45"
-EXPENSE_COLOR = "#c10015"
-NET_COLOR = "#1976d2"
+INCOME_COLOR = "#2e9e6b"
+EXPENSE_COLOR = "#d1493f"
+NET_COLOR = "#1db8ff"    # use "#f2a93b" instead if dark mode makes navy hard to see
+AVG_EXPENSE_COLOR = "#f2a93b"
 MONTH_NAMES = list(calendar.month_abbr)[1:]  # Jan ... Dec
 HOVER = "%{x}: %{y:,.2f}<extra>%{fullData.name}</extra>"
 
@@ -128,7 +129,7 @@ def _row_colours(values: list[int], reverse: bool) -> list[str]:
 
 def _style(fig: go.Figure, display: state.Display) -> go.Figure:
     """Common look: theme-aware, transparent background, amounts axis title."""
-    dark = bool(app.storage.user.get("dark_mode"))
+    dark = bool(app.storage.user.get("dark_mode", True))
     fig.update_layout(
         template="plotly_dark" if dark else "plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -137,7 +138,10 @@ def _style(fig: go.Figure, display: state.Display) -> go.Figure:
         margin={"l": 70, "r": 20, "t": 20, "b": 40},
         yaxis_title=f"Amount ({display.code})",
         legend={"orientation": "h", "y": -0.15},
-    )
+        colorway=[
+    "#1d3061", "#f2a93b", "#3b6ea5", "#d1493f", "#2e9e6b",
+    "#8e6bbf", "#e08a1e", "#4fb0b5", "#a05a3c", "#7b8794"
+    ])
     return fig
 
 def _add_average_line(fig, labels, display, cents, name, colour, factor=1) -> None:
@@ -188,7 +192,7 @@ def _income_expense_figure(rows, periods, display, averages=None, all_years=Fals
     if averages:
         _add_average_line(
             fig, labels, display, averages["net"],
-            f"Avg net / {'year' if all_years else 'month'}", NET_COLOR,
+            f"Avg net / {'year' if all_years else 'month'}", AVG_EXPENSE_COLOR,
             factor=12 if all_years else 1,
         )
     return _style(fig, display)

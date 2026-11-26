@@ -23,6 +23,7 @@ from pathlib import Path
 
 # Keep NiceGUI's per-browser storage next to the app instead of the current directory.
 os.environ.setdefault("NICEGUI_STORAGE_PATH", str(Path(__file__).resolve().parent / ".nicegui"))
+STATIC_DIR = Path(__file__).resolve().parent / "web_app" / "static"
 
 from nicegui import ui  # noqa: E402
 
@@ -133,6 +134,7 @@ def main() -> None:
         reload=False,
         show=False,
         storage_secret=get_storage_secret(),
+        favicon=STATIC_DIR / "lantern.svg",
     )
 
 

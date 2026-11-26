@@ -1,8 +1,8 @@
-# Lantern
+# <img src="web_app/static/lantern.svg" width="40" height="40" align="absmiddle" alt=""> Lantern
 
 *A light on where your money goes.*
 
-Lantern is a small, self-hosted personal finance tracker for your home network. Built with Python, [NiceGUI](https://nicegui.io), SQLite and Plotly.
+LANtern is a small, self-hosted personal finance tracker for your home network. Built with Python, [NiceGUI](https://nicegui.io), SQLite and Plotly.
 
 - Multiple users, each with their own password, transactions and categories
 - Two-level categories (income and expense) in an order you choose

@@ -9,6 +9,8 @@ table and chart is rebuilt with the new selection. This keeps the code simple.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,7 +21,11 @@ from nicegui import app, ui
 from db import DataError, users, settings, transactions, rates
 from web_app import state
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.add_static_files("/static", STATIC_DIR)
+
 APP_TITLE = "Lantern"
+LOGO_SVG = (STATIC_DIR / "lantern.svg").read_text(encoding="utf-8")
 NAV_LINKS_MAIN: list[tuple[str, str, str]] = [
     ("Overview", "/", "bar_chart"),
     ("Add Transactions", "/transactions", "add"),
@@ -31,6 +37,57 @@ NAV_LINKS_OTHER: list[tuple[str, str, str]] = [
     ("Import CSV", "/import", ""),
     ("Backups", "/backups", ""),
 ]
+
+PALETTE = {
+    "primary": "#1f2a44",    # deep navy: header, main buttons
+    "secondary": "#f2a93b",  # lantern amber: accents
+    "accent": "#f2a93b",
+    "positive": "#2e9e6b",   # softer green (income)
+    "negative": "#d1493f",   # softer red (spending)
+    "warning": "#e08a1e",
+    "info": "#3b6ea5",
+}
+
+def apply_theme() -> None:
+    """Brand colours plus a warm off-white page background in light mode."""
+    ui.colors(**PALETTE)
+    ui.add_css("""
+        body.body--light { background: #f6f7fb; }
+        .q-card { border-radius: 12px; box-shadow: 0 1px 3px rgba(31,42,68,.10); }
+        .q-header { background: #1f2a44 !important; }
+        .q-btn.bg-primary:hover { background: #2b3a5e !important; }
+
+        /* nav buttons */
+        .q-btn.nav-btn { color: #cbd2e3 !important; border-radius: 0; border-bottom: 3px solid transparent; }
+        .q-btn.nav-btn:hover { color: #fff !important; }
+        .q-btn.nav-active { color: #fff !important; border-bottom-color: #f2a93b; font-weight: 600; }
+
+        /* dark mode: use amber wherever the app uses the primary colour */
+        body.body--dark { --q-primary: #f2a93b !important; }
+        /* dark mode: dark text on amber filled buttons and toggles */
+        body.body--dark .q-btn.bg-primary,
+        body.body--dark .q-btn.bg-primary .q-btn__content,
+        body.body--dark .q-btn.bg-primary .q-icon { color: #1f2a44 !important; }
+        .q-header { --q-primary: #1f2a44; }
+        /* dark mode: dark text/ticks on amber for uploaders and checkboxes */
+        body.body--dark .q-uploader__header,
+        body.body--dark .q-uploader__header .q-uploader__title,
+        body.body--dark .q-uploader__header .q-uploader__subtitle,
+        body.body--dark .q-uploader__header .q-btn,
+        body.body--dark .q-uploader__header .q-icon { color: #1f2a44 !important; }
+        body.body--dark .q-checkbox__svg,
+        body.body--dark .q-checkbox__truthy { color: #1f2a44 !important; stroke: #1f2a44 !important; }
+    """)
+    ui.add_css("""
+        @font-face {
+            font-family: 'Manrope';
+            src: url('/static/fonts/Manrope-VariableFont_wght.ttf') format('truetype');
+            font-weight: 200 800;
+            font-display: swap;
+        }
+        body, .q-btn, .q-field, .q-table, .q-item { font-family: 'Manrope', sans-serif; }
+        .q-table td, .text-h5, .text-h6, .text-subtitle1 { font-variant-numeric: tabular-nums; }
+    """)
 
 @dataclass(frozen=True)
 class PageContext:
@@ -270,48 +327,76 @@ def _switch_currency(event: Any) -> None:
 
 def _toggle_dark(_: Any = None) -> None:
     """Flip dark mode, remember it, and rebuild the page (so charts match the theme)."""
-    app.storage.user["dark_mode"] = not app.storage.user.get("dark_mode", False)
+    app.storage.user["dark_mode"] = not app.storage.user.get("dark_mode", True)
     ui.navigate.reload()
 
 
 def _build_header(ctx: PageContext, active: str) -> None:
     """Title, navigation, user picker, currency selector and dark-mode toggle."""
-    is_dark = bool(app.storage.user.get("dark_mode"))
-    ui.dark_mode(value=is_dark)
     add_user_dialog = _build_add_user_dialog()
     password_dialog = _build_change_password_dialog(ctx.user["id"])
     delete_user_dialog = _build_delete_user_dialog(ctx.user)
     select_props = "dense options-dense outlined dark"
 
-    with ui.header().classes("items-center justify-between gap-4"):
+    with ui.header().classes("items-center justify-between gap-4 px-6 py-1"):
         with ui.row().classes("items-center gap-6"):
-            ui.label(APP_TITLE).classes("text-h4 text-bold")
-            with ui.button_group():
+            with ui.row().classes("items-center gap-2"):
+                ui.html(LOGO_SVG, sanitize=False).classes("w-8 h-8")
+                ui.label(APP_TITLE).classes("text-h5 text-bold")
+            with ui.row().classes("items-center gap-1"):
                 for label, path, icon in NAV_LINKS_MAIN:
-                    # UNDERLINE BUTTONS
-                    ui.button(label, on_click=lambda p=path: ui.navigate.to(p), icon=icon).classes(
-                        "text-white no-underline" + (" font-bold underline" if label == active else "")
-                    )
-
-                with ui.dropdown_button('Other functions', icon='extension', split=False).classes("text-white"):
-                    item_text = 'text-white no-underline' if is_dark else 'text-black no-underline' 
-                    for label, path, icon in NAV_LINKS_OTHER:
-                        ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes(item_text)
+                    ui.button(label, icon=icon, on_click=lambda p=path: ui.navigate.to(p)) \
+                        .props("flat no-caps color=white").classes("nav-btn" + (" nav-active" if label == active else ""))
+                with ui.button("More", icon="expand_more").props("flat no-caps color=white").classes("nav-btn" \
+                                    + (" nav-active" if any(active == label for label,_,_ in NAV_LINKS_OTHER) else "")):
+                    with ui.menu():
+                        for label, path, _ in NAV_LINKS_OTHER:
+                            ui.menu_item(label, on_click=lambda p=path: ui.navigate.to(p))
 
         with ui.row().classes("items-center gap-2"):
-            ui.label(ctx.user["name"]).classes("text-body1")
-            ui.button(icon="person_add", on_click=add_user_dialog.open) \
-                .props("flat round dense color=white").tooltip("Add user")
-            ui.button(icon="key", on_click=password_dialog.open) \
-                .props("flat round dense color=white").tooltip("Change password")
-            ui.button(icon="person_remove", on_click=delete_user_dialog.open) \
-                .props("flat round dense color=white").tooltip("Delete my account")
-            ui.button(icon="logout", on_click=_log_out) \
-                .props("flat round dense color=white").tooltip("Log out")
             ui.select(ctx.status.currencies, value=ctx.display.code, on_change=_switch_currency) \
                 .props(select_props).classes("w-24").tooltip("Display currency")
             ui.button(icon="dark_mode", on_click=_toggle_dark) \
                 .props("flat round dense color=white").tooltip("Toggle dark mode")
+            with ui.button(ctx.user["name"], icon="account_circle").props("flat no-caps").classes("text-white"):
+                with ui.menu():
+                    ui.menu_item("Add user", on_click=add_user_dialog.open)
+                    ui.menu_item("Change password", on_click=password_dialog.open)
+                    ui.menu_item("Delete my account", on_click=delete_user_dialog.open).classes("text-negative")
+                    ui.separator()
+                    ui.menu_item("Log out", on_click=_log_out)
+
+    # OLD HEADER ------------------------------------------------------------------------------------------------------------
+    # with ui.header().classes("items-center justify-between gap-4"):
+    #     with ui.row().classes("items-center gap-6"):
+    #         ui.label(APP_TITLE).classes("text-h4 text-bold")
+    #         with ui.button_group():
+    #             for label, path, icon in NAV_LINKS_MAIN:
+    #                 # UNDERLINE BUTTONS
+    #                 ui.button(label, on_click=lambda p=path: ui.navigate.to(p), icon=icon).classes(
+    #                     "text-white no-underline" + (" font-bold text-amber-5" if label == active else "")
+    #                 )
+
+    #         with ui.dropdown_button('Other functions', icon='extension', split=False).classes(
+    #             "text-white" + (" font-bold text-amber-5" if any(label == active for label, _, _ in NAV_LINKS_OTHER) else "")):
+    #             item_text = 'text-white no-underline' if is_dark else 'text-black no-underline' 
+    #             for label, path, icon in NAV_LINKS_OTHER:
+    #                 ui.item(label, on_click=lambda _, p=path: ui.navigate.to(p)).classes(item_text)
+
+    #     with ui.row().classes("items-center gap-2"):
+    #         ui.label(ctx.user["name"]).classes("text-body1")
+    #         ui.button(icon="person_add", on_click=add_user_dialog.open) \
+    #             .props("flat round dense color=white").tooltip("Add user")
+    #         ui.button(icon="key", on_click=password_dialog.open) \
+    #             .props("flat round dense color=white").tooltip("Change password")
+    #         ui.button(icon="person_remove", on_click=delete_user_dialog.open) \
+    #             .props("flat round dense color=white").tooltip("Delete my account")
+    #         ui.button(icon="logout", on_click=_log_out) \
+    #             .props("flat round dense color=white").tooltip("Log out")
+    #         ui.select(ctx.status.currencies, value=ctx.display.code, on_change=_switch_currency) \
+    #             .props(select_props).classes("w-24").tooltip("Display currency")
+    #         ui.button(icon="dark_mode", on_click=_toggle_dark) \
+    #             .props("flat round dense color=white").tooltip("Toggle dark mode")
 
 
 # --------------------------------------------------------------------------
@@ -372,6 +457,8 @@ async def build_layout(active: str) -> PageContext | None:
     ``active`` is the navigation label to highlight. Returns ``None`` (after
     showing the setup card) when the base currency or the first user is missing.
     """
+    apply_theme()
+    ui.dark_mode(value=app.storage.user.get("dark_mode", True))
     user_list = users.list_users()
     need_currency = not settings.is_base_currency_set()
     if need_currency or not user_list:
